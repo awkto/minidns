@@ -1,0 +1,11 @@
+# Query log retention for minidns (unbound query/reply/rpz log).
+# copytruncate so unbound keeps writing without needing a signal.
+/var/log/minidns/unbound.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
