@@ -1,0 +1,164 @@
+// Package rpz reads and writes the RPZ zone files minidns feeds to unbound.
+//
+// Manual firewall blocks resolve to NXDOMAIN via "CNAME .", the allowlist
+// uses "CNAME rpz-passthru." (and is configured first, so it always wins).
+package rpz
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+const (
+	ActionBlock    = "."             // rpz NXDOMAIN
+	ActionPassthru = "rpz-passthru." // rpz allow
+)
+
+var domainRe = regexp.MustCompile(`^(\*\.)?([a-z0-9_]([a-z0-9_-]*[a-z0-9_])?\.)+[a-z][a-z0-9-]*$`)
+
+// ValidDomain reports whether s looks like a blockable domain name.
+func ValidDomain(s string) bool {
+	return len(s) <= 253 && domainRe.MatchString(s)
+}
+
+// Normalize lowercases and strips a trailing dot.
+func Normalize(s string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
+}
+
+// Write emits an RPZ zone file for the given domains and action. When
+// wildcard is true each domain also gets a *.domain entry so subdomains
+// match. Returns the number of domains written.
+func Write(path string, domains []string, action string, wildcard bool) (int, error) {
+	uniq := make(map[string]struct{}, len(domains))
+	for _, d := range domains {
+		d = Normalize(d)
+		if ValidDomain(strings.TrimPrefix(d, "*.")) {
+			uniq[d] = struct{}{}
+		}
+	}
+	sorted := make([]string, 0, len(uniq))
+	for d := range uniq {
+		sorted = append(sorted, d)
+	}
+	sort.Strings(sorted)
+
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return 0, err
+	}
+	w := bufio.NewWriterSize(f, 1<<20)
+	serial := time.Now().Unix()
+	fmt.Fprintf(w, "$TTL 300\n@ IN SOA localhost. root.localhost. (%d 43200 3600 86400 300)\n@ IN NS localhost.\n", serial)
+	for _, d := range sorted {
+		fmt.Fprintf(w, "%s CNAME %s\n", d, action)
+		if wildcard && !strings.HasPrefix(d, "*.") {
+			fmt.Fprintf(w, "*.%s CNAME %s\n", d, action)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		return 0, err
+	}
+	if err := f.Close(); err != nil {
+		return 0, err
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		return 0, err
+	}
+	return len(sorted), os.Rename(tmp, path)
+}
+
+// ReadDomains returns the (non-wildcard) domains present in an RPZ file
+// previously written by Write.
+func ReadDomains(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) >= 3 && fields[1] == "CNAME" && !strings.HasPrefix(fields[0], "*.") &&
+			!strings.HasPrefix(fields[0], "@") && !strings.HasPrefix(fields[0], "$") {
+			out = append(out, fields[0])
+		}
+	}
+	return out, sc.Err()
+}
+
+// CountEntries counts CNAME policy records in an RPZ file (wildcards
+// included) without loading it into memory.
+func CountEntries(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	n := 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), " CNAME ") {
+			n++
+		}
+	}
+	return n
+}
+
+// Contains reports whether domain (or a wildcard covering it) is present in
+// the RPZ file, returning the matching entry.
+func Contains(path, domain string) (string, bool) {
+	domains, err := ReadAll(path)
+	if err != nil {
+		return "", false
+	}
+	domain = Normalize(domain)
+	if _, ok := domains[domain]; ok {
+		return domain, true
+	}
+	// walk up labels checking wildcard entries
+	rest := domain
+	for {
+		i := strings.IndexByte(rest, '.')
+		if i < 0 {
+			return "", false
+		}
+		rest = rest[i+1:]
+		if _, ok := domains["*."+rest]; ok {
+			return "*." + rest, true
+		}
+	}
+}
+
+// ReadAll returns every owner name in the file (wildcards included) as a set.
+func ReadAll(path string) (map[string]struct{}, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	set := make(map[string]struct{})
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) >= 3 && fields[1] == "CNAME" &&
+			!strings.HasPrefix(fields[0], "@") && !strings.HasPrefix(fields[0], "$") {
+			set[fields[0]] = struct{}{}
+		}
+	}
+	return set, sc.Err()
+}

@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        rm -f /etc/unbound/unbound.conf.d/minidns.conf
+        rm -rf /var/lib/minidns /var/log/minidns /etc/minidns
+        if [ -d /run/systemd/system ] && systemctl is-active --quiet unbound 2>/dev/null; then
+            systemctl reload unbound 2>/dev/null || systemctl restart unbound 2>/dev/null || true
+        fi
+        ;;
+    remove)
+        # keep config/state, but stop feeding a config that references our files
+        rm -f /etc/unbound/unbound.conf.d/minidns.conf
+        if [ -d /run/systemd/system ] && systemctl is-active --quiet unbound 2>/dev/null; then
+            systemctl restart unbound 2>/dev/null || true
+        fi
+        ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

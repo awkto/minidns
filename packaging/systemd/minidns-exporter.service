@@ -1,0 +1,11 @@
+[Unit]
+Description=minidns Prometheus exporter (unbound stats)
+After=unbound.service
+
+[Service]
+ExecStart=/usr/bin/minidns exporter
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

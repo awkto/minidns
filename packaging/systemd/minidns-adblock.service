@@ -1,0 +1,8 @@
+[Unit]
+Description=minidns adblock list refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/minidns adblock update --quiet
