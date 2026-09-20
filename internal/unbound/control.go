@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/awkto/minidns/internal/paths"
 )
@@ -19,17 +20,41 @@ func Control(args ...string) (string, error) {
 	return string(out), nil
 }
 
-// Reload asks the daemon to re-read its config; falls back to a systemd
-// restart if the control channel isn't up.
+// Reload asks the daemon to re-read its config and waits until it is serving
+// again; falls back to a systemd restart if the control channel isn't up.
+//
+// `unbound-control reload` only *queues* the reload: it returns at once and
+// the daemon re-reads its config and zone files afterwards — and exits if
+// one of them has gone missing by then. Callers rely on Reload not returning
+// until that window has closed (e.g. before deleting a file the old config
+// referenced).
 func Reload() error {
 	if _, err := Control("reload"); err == nil {
-		return nil
+		return WaitReady(readyTimeout)
 	}
 	out, err := exec.Command("systemctl", "restart", "unbound").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl restart unbound: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return WaitReady(readyTimeout)
+}
+
+// readyTimeout bounds how long a reload may take; loading a few hundred
+// thousand RPZ entries on a Raspberry Pi takes several seconds.
+const readyTimeout = 90 * time.Second
+
+// WaitReady blocks until the daemon answers on its control channel again.
+func WaitReady(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if exec.Command("unbound-control", "status").Run() == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("unbound did not come back within %s — it may have rejected the new configuration; check `journalctl -u unbound` or %s", timeout, paths.QueryLog())
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // Restart fully restarts the daemon. Needed for settings unbound only reads
@@ -41,10 +66,9 @@ func Restart() error {
 		if err != nil {
 			return fmt.Errorf("systemctl restart unbound: %v: %s", err, strings.TrimSpace(string(out)))
 		}
-		return nil
+		return WaitReady(readyTimeout)
 	}
-	_, err := Control("reload")
-	return err
+	return Reload()
 }
 
 // ReloadZone reloads one auth/RPZ zone from its zonefile without dropping

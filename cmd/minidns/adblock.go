@@ -146,10 +146,12 @@ func cmdAdblock(args []string) error {
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
-			os.Remove(paths.AdblockRPZ(n))
+			// unbound must stop referencing the file before it disappears —
+			// a daemon that reloads and finds it missing exits
 			if err := cmdApply(true); err != nil {
 				return err
 			}
+			os.Remove(paths.AdblockRPZ(n))
 			fmt.Println("removed list", n)
 			return nil
 		}

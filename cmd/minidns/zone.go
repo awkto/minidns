@@ -75,10 +75,11 @@ func cmdZone(args []string) error {
 		if err := config.Save(cfg); err != nil {
 			return err
 		}
-		os.Remove(paths.ZoneFile(name))
+		// same ordering as list removal: config first, file second
 		if err := cmdApply(true); err != nil {
 			return err
 		}
+		os.Remove(paths.ZoneFile(name))
 		fmt.Println("removed zone", name)
 		return nil
 

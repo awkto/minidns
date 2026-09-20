@@ -11,6 +11,8 @@ byte-identical to v0.1.0's, so upgrading does not restart unbound.
 - **`setup` failed on stock Ubuntu** with "can't bind socket: Address already in use for 0.0.0.0 port 53". Setup now turns off systemd-resolved's stub listener with a drop-in and repoints `/etc/resolv.conf` at resolved's uplink file, so the host keeps resolving as before. Removing the package undoes both.
 - **Package upgrades now re-apply the configuration** (validated, with the previous config kept if validation fails). unbound is left alone when the generated config did not change.
 - **A bad provider response can no longer replace a working replica**: fetched zone data must parse, have one SOA at the apex and stay inside the zone before it is activated.
+- **Removing a blocklist or replica could kill unbound.** `unbound-control reload` only queues the reload; the file was deleted while the daemon was still re-reading a config that referenced it, and unbound exits when a zone file is missing. Reloads are now waited on, and files are deleted only after unbound has stopped referencing them. (Found by CI.)
+- **Every blocklist refresh reloaded unbound even when nothing changed**, because the generated file's serial is a timestamp. Unchanged lists are now left untouched, so the daily timer no longer drops the cache for nothing.
 - `test` named the wrong blocklist when several were configured (it checked them in a different order than unbound applies them).
 - `logs -f` could lose a line that unbound was still writing.
 - Files are written world-readable regardless of root's umask (a `umask 077` root shell used to produce zone files unbound could not read, which took the daemon down on reload).

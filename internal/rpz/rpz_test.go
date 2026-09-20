@@ -1,7 +1,9 @@
 package rpz
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,5 +81,30 @@ func TestValidListName(t *testing.T) {
 		if ValidListName(bad) {
 			t.Errorf("%q should be invalid", bad)
 		}
+	}
+}
+
+func TestWriteLeavesIdenticalContentAlone(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "list.rpz")
+	if _, err := Write(p, []string{"a.example", "b.example"}, ActionBlock, false); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(p)
+	// force a different timestamp-serial if the file were rewritten
+	stale := []byte(strings.Replace(string(before), "(", "(1 ; ", 1))
+	os.WriteFile(p, stale, 0o644)
+	if n, err := Write(p, []string{"b.example", "a.example"}, ActionBlock, false); err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	after, _ := os.ReadFile(p)
+	if string(after) != string(stale) {
+		t.Error("same entries must not rewrite the file (it would trigger a pointless unbound reload)")
+	}
+	if _, err := Write(p, []string{"a.example", "c.example"}, ActionBlock, false); err != nil {
+		t.Fatal(err)
+	}
+	after, _ = os.ReadFile(p)
+	if string(after) == string(stale) {
+		t.Error("changed entries must rewrite the file")
 	}
 }

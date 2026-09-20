@@ -6,6 +6,7 @@ package rpz
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -54,20 +55,31 @@ func Write(path string, domains []string, action string, wildcard bool) (int, er
 	}
 	sort.Strings(sorted)
 
+	var body bytes.Buffer
+	for _, d := range sorted {
+		fmt.Fprintf(&body, "%s CNAME %s\n", d, action)
+		if wildcard && !strings.HasPrefix(d, "*.") {
+			fmt.Fprintf(&body, "*.%s CNAME %s\n", d, action)
+		}
+	}
+	// The SOA serial is a timestamp, so two writes of the same entries never
+	// produce identical files. Leave the file alone when only the serial
+	// would differ, so callers comparing file hashes see "unchanged" and
+	// don't reload unbound for nothing.
+	if old, err := os.ReadFile(path); err == nil {
+		if _, oldBody, ok := bytes.Cut(old, []byte(headerEnd)); ok && bytes.Equal(oldBody, body.Bytes()) {
+			return len(sorted), nil
+		}
+	}
+
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		return 0, err
 	}
 	w := bufio.NewWriterSize(f, 1<<20)
-	serial := time.Now().Unix()
-	fmt.Fprintf(w, "$TTL 300\n@ IN SOA localhost. root.localhost. (%d 43200 3600 86400 300)\n@ IN NS localhost.\n", serial)
-	for _, d := range sorted {
-		fmt.Fprintf(w, "%s CNAME %s\n", d, action)
-		if wildcard && !strings.HasPrefix(d, "*.") {
-			fmt.Fprintf(w, "*.%s CNAME %s\n", d, action)
-		}
-	}
+	fmt.Fprintf(w, "$TTL 300\n@ IN SOA localhost. root.localhost. (%d 43200 3600 86400 300)\n%s", time.Now().Unix(), headerEnd)
+	w.Write(body.Bytes())
 	if err := w.Flush(); err != nil {
 		f.Close()
 		return 0, err
@@ -80,6 +92,10 @@ func Write(path string, domains []string, action string, wildcard bool) (int, er
 	}
 	return len(sorted), os.Rename(tmp, path)
 }
+
+// headerEnd is the last header line of a generated RPZ file; everything
+// after it is policy records.
+const headerEnd = "@ IN NS localhost.\n"
 
 // ReadDomains returns the entries of an RPZ file previously written by
 // Write, as the user entered them: "example.com" stands for the domain and
