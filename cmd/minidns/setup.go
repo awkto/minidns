@@ -316,32 +316,32 @@ func persistMigration(cfg *config.Config) {
 	}
 }
 
-// cmdApply regenerates the unbound config fragment and (optionally) reloads.
+// cmdApply regenerates the unbound config fragment and (optionally)
+// activates it. A candidate unbound rejects never replaces the active file,
+// and if the daemon does not come back with an accepted one, the previous
+// file is restored and loaded again (cmdApplyQuiet).
 func cmdApply(reload bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	persistMigration(cfg)
-	rendered := unbound.Render(cfg)
-	current, _ := os.ReadFile(paths.UnboundConfFile())
-	if err := unbound.WriteConf(rendered); err != nil {
-		return err
+	if !reload {
+		return unbound.WriteConf(unbound.Render(cfg))
 	}
-	if reload && string(current) == rendered && unbound.Active() {
+	current, _ := os.ReadFile(paths.UnboundConfFile())
+	running := unbound.Active()
+	if err := cmdApplyQuiet(); err != nil {
+		return applyError{fmt.Errorf("unbound did not accept the configuration (the previous one is active again): %w", err)}
+	}
+	switch {
+	case !running:
+		fmt.Println("applied (unbound not running — start it with `minidns install` or systemctl)")
+	case string(current) == unbound.Render(cfg):
 		// nothing for the daemon to pick up — keep its cache warm
 		fmt.Println("applied (no changes)")
-		return nil
-	}
-	if reload && unbound.Active() {
-		// restart rather than reload: some options (tls-cert-bundle) are
-		// only read at startup, and reload drops the cache anyway
-		if err := unbound.Restart(); err != nil {
-			return err
-		}
-		fmt.Println("applied + restarted unbound")
-	} else if reload {
-		fmt.Println("applied (unbound not running — start it with `minidns setup` or systemctl)")
+	default:
+		fmt.Println("applied + reloaded unbound")
 	}
 	return nil
 }

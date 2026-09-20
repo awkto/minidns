@@ -64,16 +64,19 @@ jobs:
   # both supported baselines, with the exact deb that will be published
   e2e:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        image: ['ubuntu:24.04', 'debian:12']
+        include:
+          - { image: 'ubuntu:24.04', runner: ubuntu-latest, arch: amd64 }
+          - { image: 'debian:12', runner: ubuntu-latest, arch: amd64 }
+          - { image: 'debian:12', runner: ubuntu-24.04-arm, arch: arm64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: minidns-amd64
+          name: minidns-${{ matrix.arch }}
       - name: end-to-end (fresh install)
         run: docker run --rm -v "$PWD:/work" ${{ matrix.image }} bash /work/scripts/e2e.sh
       - name: upgrade from the previous release

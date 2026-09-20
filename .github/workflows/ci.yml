@@ -27,8 +27,10 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           # 99.x so the upgrade test really is an upgrade from any release
-          go build -trimpath -ldflags "-s -w -X main.version=v99.0.0-ci${{ github.run_number }}" -o minidns-linux-amd64 ./cmd/minidns
-          bash scripts/build-deb.sh 99.0.0~ci${{ github.run_number }} amd64 minidns-linux-amd64
+          for arch in amd64 arm64; do
+            GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=v99.0.0-ci${{ github.run_number }}" -o minidns-linux-$arch ./cmd/minidns
+            bash scripts/build-deb.sh 99.0.0~ci${{ github.run_number }} $arch minidns-linux-$arch
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: deb
@@ -37,13 +39,17 @@ jobs:
   # The two supported baselines: Ubuntu 24.04 (unbound 1.19) and Debian 12
   # (unbound 1.17). Each gets a fresh-install run and an upgrade from the
   # previous release.
+  # arm64 is what the first production host (a Raspberry Pi on Debian 12) runs.
   e2e:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        image: ['ubuntu:24.04', 'debian:12']
+        include:
+          - { image: 'ubuntu:24.04', runner: ubuntu-latest }
+          - { image: 'debian:12', runner: ubuntu-latest }
+          - { image: 'debian:12', runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

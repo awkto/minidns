@@ -4,10 +4,12 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -156,6 +158,25 @@ func (c *Config) Validate() error {
 	for _, z := range c.CloudZones {
 		if len(z.Name) > 253 || !zoneNameRe.MatchString(z.Name) {
 			return fmt.Errorf("cloud zone name %q is invalid", z.Name)
+		}
+	}
+	for _, l := range c.Listen {
+		addr, port, hasPort := strings.Cut(l, "@")
+		if _, err := netip.ParseAddr(addr); err != nil {
+			return fmt.Errorf("listen address %q is not an IP address", l)
+		}
+		if p, err := strconv.Atoi(port); hasPort && (err != nil || p < 1 || p > 65535) {
+			return fmt.Errorf("listen address %q has an invalid port", l)
+		}
+	}
+	if c.Port < 1 || c.Port > 65535 {
+		return fmt.Errorf("port %d is out of range", c.Port)
+	}
+	for _, n := range c.AllowNetworks {
+		if _, err := netip.ParsePrefix(n); err != nil {
+			if _, err := netip.ParseAddr(n); err != nil {
+				return fmt.Errorf("allow_networks entry %q is not a network (e.g. 192.168.0.0/16)", n)
+			}
 		}
 	}
 	for _, u := range c.Upstreams {

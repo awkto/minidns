@@ -51,11 +51,11 @@ func cmdZone(args []string) error {
 		if err := syncZone(cfg, z, false); err != nil {
 			return err
 		}
-		cfg.CloudZones = append(cfg.CloudZones, z)
-		if err := config.Save(cfg); err != nil {
-			return err
-		}
-		if err := cmdApply(true); err != nil {
+		if _, err := changeConfig(func(c *config.Config) error {
+			c.CloudZones = append(c.CloudZones, z)
+			return nil
+		}); err != nil {
+			os.Remove(paths.ZoneFile(name))
 			return err
 		}
 		fmt.Printf("zone %s mirrored — it will keep resolving locally even if your ISP is down\n", name)
@@ -81,18 +81,17 @@ func cmdZone(args []string) error {
 				return fmt.Errorf("%w: %s still has %d local overlay record(s); re-run with --force to delete them with the replica", zones.ErrConflict, name, len(ov.Records))
 			}
 		}
-		out := cfg.CloudZones[:0]
-		for _, z := range cfg.CloudZones {
-			if z.Name != name {
-				out = append(out, z)
-			}
-		}
-		cfg.CloudZones = out
-		if err := config.Save(cfg); err != nil {
-			return err
-		}
 		// same ordering as list removal: config first, file second
-		if err := cmdApply(true); err != nil {
+		if _, err := changeConfig(func(c *config.Config) error {
+			out := c.CloudZones[:0]
+			for _, z := range c.CloudZones {
+				if z.Name != name {
+					out = append(out, z)
+				}
+			}
+			c.CloudZones = out
+			return nil
+		}); err != nil {
 			return err
 		}
 		os.Remove(paths.ZoneFile(name))

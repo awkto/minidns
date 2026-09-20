@@ -306,6 +306,20 @@ expect "forwarder test --zone: ok"           "corp.example +127.0.0.1@5353 +ok" 
 expect_rc "invalid address → exit 3"         3 minidns forwarder add not-an-ip
 expect_rc "a zone served here cannot be forwarded → exit 5" 5 bash -c 'minidns zone add fwd-clash.example >/dev/null && minidns forwarder add 10.0.0.1 --zone fwd-clash.example'
 minidns zone remove fwd-clash.example --force >/dev/null; wait_dns
+# unbound refusing a change: everything must go back. (A broken fragment from
+# somewhere else makes unbound-checkconf reject whatever we generate.)
+printf 'server:\n  no-such-option: yes\n' > /etc/unbound/unbound.conf.d/foreign.conf
+cp /etc/minidns/config.yaml /tmp/config.before-clash; cp /etc/unbound/unbound.conf.d/minidns.conf /tmp/conf.before-clash
+expect_rc "a change unbound rejects → exit 6"   6 minidns forwarder add 10.0.0.1 --zone clash.example
+check  "…config.yaml is what it was"            cmp /tmp/config.before-clash /etc/minidns/config.yaml
+check  "…the generated unbound config too"      cmp /tmp/conf.before-clash /etc/unbound/unbound.conf.d/minidns.conf
+expect "…and unbound keeps serving"             "10.99.0.1" minidns query intranet.corp.example
+expect_rc "--dry-run predicts the rejection → exit 6" 6 minidns forwarder add 10.0.0.1 --zone clash.example --dry-run
+rm -f /etc/unbound/unbound.conf.d/foreign.conf
+cp /etc/minidns/config.yaml /tmp/config.good2
+sed -i 's|^    - 10.0.0.0/8|    - 10.0.0.0/99|' /etc/minidns/config.yaml
+expect_rc "a hand edit that is not a network is caught before unbound sees it → exit 3" 3 minidns config validate
+cp /tmp/config.good2 /etc/minidns/config.yaml
 # an unreachable private forwarder is valid configuration; only `test` complains
 expect "unreachable forwarder is accepted"   "Added lab.example forwarder" minidns forwarder add 192.0.2.53 --zone lab.example
 wait_dns

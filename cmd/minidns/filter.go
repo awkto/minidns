@@ -477,30 +477,33 @@ func addList(cfg *config.Config, name, url, format string) (int, error) {
 		adblock.Forget(name)
 		return 0, err
 	}
-	cfg.Adblock.Lists = append(cfg.Adblock.Lists, l)
-	if err := config.Save(cfg); err != nil {
+	if _, err := changeConfig(func(c *config.Config) error {
+		c.Adblock.Lists = append(c.Adblock.Lists, l)
+		return nil
+	}); err != nil {
+		os.Remove(paths.AdblockRPZ(name))
+		adblock.Forget(name)
 		return 0, err
 	}
-	return count, cmdApply(true)
+	return count, nil
 }
 
 func removeList(cfg *config.Config, name string) error {
 	if cfg.FindList(name) == nil {
 		return fmt.Errorf("%w: no blocklist named %q", zones.ErrNotFound, name)
 	}
-	out := cfg.Adblock.Lists[:0]
-	for _, l := range cfg.Adblock.Lists {
-		if l.Name != name {
-			out = append(out, l)
-		}
-	}
-	cfg.Adblock.Lists = out
-	if err := config.Save(cfg); err != nil {
-		return err
-	}
 	// unbound must stop referencing the file before it disappears — a
 	// daemon that reloads and finds it missing exits
-	if err := cmdApply(true); err != nil {
+	if _, err := changeConfig(func(c *config.Config) error {
+		out := c.Adblock.Lists[:0]
+		for _, l := range c.Adblock.Lists {
+			if l.Name != name {
+				out = append(out, l)
+			}
+		}
+		c.Adblock.Lists = out
+		return nil
+	}); err != nil {
 		return err
 	}
 	os.Remove(paths.AdblockRPZ(name))
