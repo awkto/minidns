@@ -37,7 +37,7 @@ func cmdLogs(args []string) error {
 	client := fs.String("client", "", "only entries from this client IP")
 	blocked := fs.Bool("blocked", false, "only RPZ-blocked queries")
 	since := fs.Duration("since", 0, "look back this far (e.g. 24h); default: last entries")
-	if err := fs.Parse(args); err != nil {
+	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
 
@@ -99,7 +99,7 @@ func cmdTop(args []string) error {
 	client := fs.String("client", "", "only queries from this client IP")
 	blocked := fs.Bool("blocked", false, "only RPZ-blocked queries")
 	since := fs.Duration("since", 24*time.Hour, "look back this far (0 = everything)")
-	if err := fs.Parse(args); err != nil {
+	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
 
@@ -205,7 +205,7 @@ func cmdStats(args []string) error {
 func cmdExporter(args []string) error {
 	fs := flag.NewFlagSet("exporter", flag.ContinueOnError)
 	listen := fs.String("listen", "", "listen address (default: exporter.listen from config)")
-	if err := fs.Parse(args); err != nil {
+	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
 	cfg, err := config.Load()

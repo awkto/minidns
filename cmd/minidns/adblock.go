@@ -51,7 +51,7 @@ func cmdAdblock(args []string) error {
 	case "update":
 		fs := flag.NewFlagSet("adblock update", flag.ContinueOnError)
 		quiet := fs.Bool("quiet", false, "only print errors")
-		if err := fs.Parse(args[1:]); err != nil {
+		if _, err := parseArgs(fs, args[1:]); err != nil {
 			return err
 		}
 		if len(cfg.Adblock.Lists) == 0 {
@@ -95,16 +95,20 @@ func cmdAdblock(args []string) error {
 			fs := flag.NewFlagSet("adblock list add", flag.ContinueOnError)
 			name := fs.String("name", "", "short list name (default: derived from URL)")
 			format := fs.String("format", "hosts", "list format: hosts|domains|rpz")
-			if err := fs.Parse(args[2:]); err != nil {
+			pos, err := parseArgs(fs, args[2:])
+			if err != nil {
 				return err
 			}
-			if fs.NArg() != 1 {
+			if len(pos) != 1 {
 				return fmt.Errorf("usage: minidns adblock list add <url> [--name n] [--format hosts|domains|rpz]")
 			}
-			url := fs.Arg(0)
+			url := pos[0]
 			n := *name
 			if n == "" {
 				n = config.ListNameFromURL(url)
+			}
+			if !rpz.ValidListName(n) {
+				return fmt.Errorf("invalid list name %q: use lowercase letters, digits, - and _ (set one with --name)", n)
 			}
 			if cfg.FindList(n) != nil {
 				return fmt.Errorf("list %q already exists", n)

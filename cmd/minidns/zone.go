@@ -11,7 +11,9 @@ import (
 	"github.com/awkto/minidns/internal/config"
 	"github.com/awkto/minidns/internal/paths"
 	"github.com/awkto/minidns/internal/provider"
+	"github.com/awkto/minidns/internal/rpz"
 	"github.com/awkto/minidns/internal/unbound"
+	"github.com/awkto/minidns/internal/zonefile"
 )
 
 func cmdZone(args []string) error {
@@ -26,13 +28,17 @@ func cmdZone(args []string) error {
 	case "add":
 		fs := flag.NewFlagSet("zone add", flag.ContinueOnError)
 		prov := fs.String("provider", "digitalocean", "dns provider (digitalocean; roadmap: route53, azure, cloudflare)")
-		if err := fs.Parse(args[1:]); err != nil {
+		pos, err := parseArgs(fs, args[1:])
+		if err != nil {
 			return err
 		}
-		if fs.NArg() != 1 {
+		if len(pos) != 1 {
 			return fmt.Errorf("usage: minidns zone add <zone> [--provider digitalocean]")
 		}
-		name := strings.TrimSuffix(strings.ToLower(fs.Arg(0)), ".")
+		name := rpz.Normalize(pos[0])
+		if !rpz.ValidDomain(name) || strings.HasPrefix(name, "*.") {
+			return fmt.Errorf("%q is not a valid zone name", pos[0])
+		}
 		if cfg.FindZone(name) != nil {
 			return fmt.Errorf("zone %s is already mirrored", name)
 		}
@@ -94,14 +100,18 @@ func cmdZone(args []string) error {
 	case "sync":
 		fs := flag.NewFlagSet("zone sync", flag.ContinueOnError)
 		quiet := fs.Bool("quiet", false, "only print errors and changes")
-		if err := fs.Parse(args[1:]); err != nil {
+		pos, err := parseArgs(fs, args[1:])
+		if err != nil {
 			return err
 		}
+		if len(pos) > 1 {
+			return fmt.Errorf("usage: minidns zone sync [<zone>] [--quiet]")
+		}
 		targets := cfg.Zones
-		if fs.NArg() == 1 {
-			z := cfg.FindZone(fs.Arg(0))
+		if len(pos) == 1 {
+			z := cfg.FindZone(pos[0])
 			if z == nil {
-				return fmt.Errorf("zone %s is not mirrored", fs.Arg(0))
+				return fmt.Errorf("zone %s is not mirrored", pos[0])
 			}
 			targets = []config.Zone{*z}
 		}
@@ -132,13 +142,18 @@ func syncZone(cfg *config.Config, z config.Zone, quiet bool) error {
 	if err != nil {
 		return err
 	}
-	zonefile, err := p.FetchZone(z.Name)
+	data, err := p.FetchZone(z.Name)
 	if err != nil {
 		return err
 	}
+	// never activate data we can't vouch for — a bad API response must not
+	// replace the last-known-good copy
+	if _, err := zonefile.Validate(z.Name, data); err != nil {
+		return fmt.Errorf("%s returned an unusable zone (keeping the current copy): %w", p.Name(), err)
+	}
 	target := paths.ZoneFile(z.Name)
 	old, _ := os.ReadFile(target)
-	if string(old) == zonefile {
+	if string(old) == data {
 		if !quiet {
 			fmt.Printf("%s: unchanged (serial %s)\n", z.Name, zoneSerial(target))
 		}
@@ -146,7 +161,12 @@ func syncZone(cfg *config.Config, z config.Zone, quiet bool) error {
 		return os.Chtimes(target, time.Now(), time.Now())
 	}
 	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, []byte(zonefile), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(data), 0o644); err != nil {
+		return err
+	}
+	// unbound runs unprivileged and must be able to read the zone even when
+	// root's umask is restrictive
+	if err := os.Chmod(tmp, 0o644); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, target); err != nil {

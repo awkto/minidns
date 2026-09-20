@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -99,7 +100,32 @@ func Load() (*Config, error) {
 	if err := yaml.Unmarshal(b, c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", paths.ConfigFile(), err)
 	}
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", paths.ConfigFile(), err)
+	}
 	return c, nil
+}
+
+var (
+	listNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	zoneNameRe = regexp.MustCompile(`^([a-z0-9_]([a-z0-9_-]*[a-z0-9_])?\.)+[a-z][a-z0-9-]*$`)
+)
+
+// Validate rejects names that would be unsafe in the file paths and unbound
+// config lines generated from them (a hand-edited config is the only way to
+// get them past the CLI, but the renderer must not trust it).
+func (c *Config) Validate() error {
+	for _, l := range c.Adblock.Lists {
+		if !listNameRe.MatchString(l.Name) {
+			return fmt.Errorf("adblock list name %q is invalid (lowercase letters, digits, - and _)", l.Name)
+		}
+	}
+	for _, z := range c.Zones {
+		if len(z.Name) > 253 || !zoneNameRe.MatchString(z.Name) {
+			return fmt.Errorf("zone name %q is invalid", z.Name)
+		}
+	}
+	return nil
 }
 
 // Save writes the config with 0600 perms (it may hold provider tokens).
