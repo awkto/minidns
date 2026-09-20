@@ -667,3 +667,29 @@ func BestReverseZone(localZones []string, addr netip.Addr) string {
 	}
 	return best
 }
+
+// AddrFromPTR is the inverse of PTRName: the address a reverse-lookup name
+// stands for (ok is false for anything that is not a complete one).
+func AddrFromPTR(name string) (netip.Addr, bool) {
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	labels := strings.Split(name, ".")
+	switch {
+	case strings.HasSuffix(name, ".in-addr.arpa") && len(labels) == 6:
+		a, err := netip.ParseAddr(labels[3] + "." + labels[2] + "." + labels[1] + "." + labels[0])
+		return a, err == nil && a.Is4()
+	case strings.HasSuffix(name, ".ip6.arpa") && len(labels) == 34:
+		var b strings.Builder
+		for i := 31; i >= 0; i-- {
+			if len(labels[i]) != 1 {
+				return netip.Addr{}, false
+			}
+			b.WriteString(labels[i])
+			if i%4 == 0 && i > 0 {
+				b.WriteByte(':')
+			}
+		}
+		a, err := netip.ParseAddr(b.String())
+		return a, err == nil
+	}
+	return netip.Addr{}, false
+}

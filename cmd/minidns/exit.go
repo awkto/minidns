@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 
 	"github.com/awkto/minidns/internal/zones"
@@ -97,4 +98,11 @@ func note(format string, a ...any) {
 		return
 	}
 	fmt.Printf(format+"\n", a...)
+}
+
+// isTerminal reports whether f is an interactive terminal (a character
+// device is not enough: /dev/null is one too).
+func isTerminal(f *os.File) bool {
+	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
+	return err == nil
 }

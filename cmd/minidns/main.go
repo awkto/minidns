@@ -105,6 +105,17 @@ func markReadOnly(cmds ...*cobra.Command) {
 	}
 }
 
+// markNoLock is for commands that change only the statistics database: it
+// serializes its own writers, and nothing in it is read by unbound.
+func markNoLock(cmds ...*cobra.Command) {
+	for _, c := range cmds {
+		if c.Annotations == nil {
+			c.Annotations = map[string]string{}
+		}
+		c.Annotations["nolock"] = "true"
+	}
+}
+
 func deprecated(old, replacement string) {
 	fmt.Fprintf(os.Stderr, "warning: `minidns %s` is deprecated and will be removed in a future release; use `minidns %s`\n", old, replacement)
 }
@@ -126,7 +137,7 @@ func rootCmd() *cobra.Command {
 				}
 				return usagef("`%s` does not support --dry-run (nothing was changed)", cmd.CommandPath())
 			}
-			if cmd.Annotations["readonly"] == "true" || cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "__complete" {
+			if cmd.Annotations["readonly"] == "true" || cmd.Annotations["nolock"] == "true" || cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "__complete" {
 				return nil
 			}
 			if os.Geteuid() != 0 && os.Getenv("MINIDNS_PREFIX") == "" {
@@ -159,6 +170,11 @@ func rootCmd() *cobra.Command {
 		c.GroupID = groupFilter
 	}
 
+	device, queryLog, stats := deviceCmd(), queryLogCmd(), statsCmd()
+	for _, c := range []*cobra.Command{device, queryLog, stats} {
+		c.GroupID = groupObserve
+	}
+
 	root.AddCommand(
 		installCmd(), setupAliasCmd(),
 		noArgs(legacy("apply", "Regenerate the unbound config and reload", groupSetup, false, func([]string) error { return cmdApply(true) })),
@@ -177,9 +193,15 @@ func rootCmd() *cobra.Command {
 		hide(legacy("upstream [set <addr>... [--tls]]", "Show or set upstream forwarders", groupResolver, false, cmdUpstream)),
 		recursionCmd(),
 
-		legacy("logs [-n N] [-f] [--client IP] [--blocked]", "Query log", groupObserve, true, cmdLogs),
-		legacy("top [-n N] [--clients] [--client IP] [--since 24h]", "Top domains or clients", groupObserve, true, cmdTop),
-		noArgs(legacy("stats", "unbound cache and query statistics", groupObserve, true, cmdStats)),
+		device, queryLog, stats,
+		hide(legacy("logs [-n N] [-f] [--client IP] [--blocked]", "Query log", groupObserve, true, func(a []string) error {
+			deprecated("logs", "query-log list | query-log tail")
+			return cmdLogs(a)
+		})),
+		hide(legacy("top [-n N] [--clients] [--client IP] [--since 24h]", "Top domains or clients", groupObserve, true, func(a []string) error {
+			deprecated("top", "stats top-domains | stats top-devices | stats blocked")
+			return cmdTop(a)
+		})),
 		legacy("exporter", "Run the Prometheus exporter", groupObserve, true, cmdExporter),
 		&cobra.Command{Use: "version", Short: "Print the version", Annotations: map[string]string{"readonly": "true"},
 			Run: func(*cobra.Command, []string) { fmt.Println("minidns", version) }},

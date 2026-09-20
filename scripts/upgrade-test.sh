@@ -34,7 +34,7 @@ export DEBIAN_FRONTEND=noninteractive
 echo "== install $FROM_VERSION ($ARCH, systemd=$SYSTEMD, $(. /etc/os-release; echo "$PRETTY_NAME")) =="
 apt-get update -qq >/dev/null
 apt-get install -y -qq curl >/dev/null 2>&1
-OLD="/tmp/minidns_${FROM_VERSION#v}_${ARCH}.deb"
+OLD="$(mktemp -d)/minidns_${FROM_VERSION#v}_${ARCH}.deb"   # a private dir: /tmp may hold a same-named file owned by someone else
 curl -fsSL -o "$OLD" "https://github.com/awkto/minidns/releases/download/${FROM_VERSION}/minidns_${FROM_VERSION#v}_${ARCH}.deb" || { echo "cannot download $FROM_VERSION"; exit 1; }
 apt-get install -y -qq "$OLD" >/dev/null 2>&1 || apt-get install -y "$OLD"
 expect "old version installed" "${FROM_VERSION}" minidns version
@@ -46,12 +46,18 @@ echo "== build state on $FROM_VERSION =="
 minidns block blocked.upgrade.example >/dev/null
 minidns allow doubleclick.net >/dev/null
 minidns upstream set 1.1.1.1 1.0.0.1 --tls >/dev/null; restart_unbound; wait_dns
-# the way the v0.1 README said to do it: the provider token inline in config.yaml
+# a provider token, stored the way the installed version wants it: inline in
+# config.yaml on v0.1 (as its README said), with set-token from v0.2 on
 PLANTED="${DIGITALOCEAN_TOKEN:-dop_v1_upgrade_test_placeholder}"
-sed -i "s|^\\( *\\)token: \"\"|\\1token: $PLANTED|" /etc/minidns/config.yaml
-grep -q "token: $PLANTED" /etc/minidns/config.yaml || { echo "could not plant the token"; exit 1; }
+if grep -q '^ *token: ""' /etc/minidns/config.yaml; then
+  sed -i "s|^\\( *\\)token: \"\"|\\1token: $PLANTED|" /etc/minidns/config.yaml
+  grep -q "token: $PLANTED" /etc/minidns/config.yaml || { echo "could not plant the token"; exit 1; }
+else
+  printf '%s' "$PLANTED" | minidns cloud provider set-token digitalocean >/dev/null || { echo "could not store the token"; exit 1; }
+fi
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
-  minidns zone add "${E2E_ZONE:-dnsif.ca}" >/dev/null 2>&1
+  if minidns cloud zone list >/dev/null 2>&1; then minidns cloud zone add "${E2E_ZONE:-dnsif.ca}" >/dev/null 2>&1
+  else minidns zone add "${E2E_ZONE:-dnsif.ca}" >/dev/null 2>&1; fi
 fi
 wait_dns
 expect "pre-upgrade: block works"     "rcode +NXDOMAIN" minidns test blocked.upgrade.example
@@ -79,7 +85,7 @@ if [ -f /etc/minidns/credentials.yaml ]; then   # v0.2+
   expect "…into the credentials file"         "$PLANTED" cat /etc/minidns/credentials.yaml
   expect "…which only root can read"          "^600 " stat -c "%a %n" /etc/minidns/credentials.yaml
   expect "config.yaml is world-readable now"  "^644 " stat -c "%a %n" /etc/minidns/config.yaml
-  expect "the pre-upgrade copy stays private" "^600 " stat -c "%a %n" /etc/minidns/config.yaml.pre-v0.2
+  [ -f /etc/minidns/config.yaml.pre-v0.2 ] && expect "the pre-upgrade copy stays private" "^600 " stat -c "%a %n" /etc/minidns/config.yaml.pre-v0.2
   if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
     check "replica sync works from the credentials file" env -u DIGITALOCEAN_TOKEN minidns cloud zone sync
   fi
@@ -103,6 +109,11 @@ if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
   expect "replica still configured"  "${E2E_ZONE:-dnsif.ca}" minidns $ZL
   expect "replica still answers"     "rcode +NOERROR" minidns test "${E2E_ZONE_HOST:-gitlab.dnsif.ca}"
   check  "replica sync works on new version" minidns $ZS
+fi
+if minidns query-log status >/dev/null 2>&1; then   # v0.3+: the statistics start with what the old version logged
+  expect "queries logged before the upgrade are in the statistics" "blocked.upgrade.example" minidns stats blocked --last 1h
+  expect "the statistics database is private" "^600 " stat -c "%a %n" /var/lib/minidns/minidns.db
+  [ "$SYSTEMD" = yes ] && check "ingest timer was enabled by the upgrade" systemctl is-active --quiet minidns-ingest.timer
 fi
 if cmp -s /tmp/minidns.conf.before /etc/unbound/unbound.conf.d/minidns.conf; then
   ok "generated unbound config identical across the upgrade"

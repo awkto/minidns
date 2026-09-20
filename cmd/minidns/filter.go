@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -176,10 +178,18 @@ func checkDomains(args []string) ([]string, error) {
 
 func (r ruleSet) addCmd(extra func(*cobra.Command)) *cobra.Command {
 	c := &cobra.Command{
-		Use: "add <domain>...", Short: "Add " + r.listHint + " (each covers its subdomains too)", Args: cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use: "add <domain>... | -", Short: "Add " + r.listHint + " (each covers its subdomains too; `-` reads names from standard input)", Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			if a, _ := cmd.Flags().GetString("action"); a != "" && !strings.EqualFold(a, "nxdomain") {
 				return fmt.Errorf("%w: action %q is not implemented — blocked names answer NXDOMAIN", zones.ErrInvalid, a)
+			}
+			if len(args) == 1 && args[0] == "-" {
+				if args, err = readNames(os.Stdin); err != nil {
+					return err
+				}
+				if len(args) == 0 {
+					return fmt.Errorf("%w: no names on standard input", zones.ErrInvalid)
+				}
 			}
 			domains, err := checkDomains(args)
 			if err != nil {
@@ -214,6 +224,23 @@ func (r ruleSet) addCmd(extra func(*cobra.Command)) *cobra.Command {
 		extra(c)
 	}
 	return c
+}
+
+// readNames reads one name per line (the first field; # starts a comment),
+// so the output of other commands can be piped in.
+func readNames(r io.Reader) ([]string, error) {
+	var out []string
+	sc := bufio.NewScanner(io.LimitReader(r, 1<<20))
+	for sc.Scan() {
+		line := sc.Text()
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		if f := strings.Fields(line); len(f) > 0 {
+			out = append(out, f[0])
+		}
+	}
+	return out, sc.Err()
 }
 
 func (r ruleSet) removeCmd() *cobra.Command {

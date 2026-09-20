@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.0 — 2026-09-21
+
+Who asks for what. The query log moves into a small local database, machines get
+names, and every "top …" question is answered in about a second — by device, for
+any period, without anything leaving the host.
+
+### Added
+- **Devices**: `device add|list|show|rename|set|remove` and `device address add|remove`. A device is a name plus the addresses it uses (IPv4/IPv6, optional MAC for your own reference — minidns does not observe MACs). Names are applied when a report is read, so naming or renaming a device relabels its history; when an address moves on, what the device asked from it stays with the device. Clients without a name stay visible as IP addresses.
+- **Statistics**: `stats` (totals, blocked share and by which list, query types, answers, resolver cache numbers, top domains, top devices), `stats top-domains`, `stats top-devices`, `stats blocked`, `stats reverse` (most looked-up addresses, shown as the address with its device name), `stats device <name>`. All take a period (`--last 24h|7d|2w` or `--from/--to`), `--device` or `--client`, `--type`, `--domain`, `--blocked/--allowed`, `-n`, `--json`; `--group-by registered` counts subdomains under their registrable domain (`www.example.co.uk` → `example.co.uk`).
+- **Block from a report**: `stats top-domains --pick` blocks the rows you name; in scripts, `… --json | jq -r '.rows[].key' | minidns block add -` (`block add -` and `allow add -` read names from standard input).
+- **Query log**: `query-log list` with filters for period, device, client, domain (exact or with subdomains), type, response code, blocked/allowed; `query-log tail` follows live with device names; `query-log enable|disable` (with a privacy notice), `status`, `retention --events/--hourly/--daily`, `purge --expired|--all`.
+- **Storage**: a SQLite database (`/var/lib/minidns/minidns.db`, pure Go — the static binary stays) fed from unbound's log by `minidns-ingest.timer` every 5 minutes and before any report. Ingestion is incremental and exact across restarts and logrotate; the first run imports the logs already on disk, so statistics start with history. Kept by default: individual queries 7 days, hourly counts 35 days, daily counts 400 days. Zones, records, rules and `config.yaml` stay in files; nothing on the DNS path depends on the database.
+- **Exporter**: named metrics next to the raw `unbound_*` ones — `minidns_queries_total`, `minidns_cache_hit_ratio`, `minidns_queries_per_second`, `minidns_blocked_total`, `minidns_answers_total{rcode=…}`, `minidns_recursion_time_avg_seconds`. Labels are bounded sets only, never a domain or a client.
+- `query --source <address>` sends the question from a specific local address (what would that client get?).
+- `doctor` checks the database and the ingest timer; `backup` includes a consistent database snapshot — devices and counts, not the individual queries unless `--with-queries`.
+
+### Changed
+- **Privacy**: the log directory is now `0750 unbound:adm` (it was world-readable), the database is `0600`; devices, statistics and the query log need `sudo`.
+- The exporter service runs as the unprivileged `unbound` user in a systemd sandbox instead of as root.
+- `logs` and `top` keep working with a deprecation warning (`query-log`, `stats`). `stats` is now the statistics overview; the resolver cache numbers it used to print are part of it.
+- Built with Go 1.25; the binary grows from 11 MB to 22 MB (the embedded database).
+
 ## v0.2.0 — 2026-09-21
 
 minidns grows from "resolver + blocking" into a small DNS server manager: local

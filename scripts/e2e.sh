@@ -419,19 +419,81 @@ expect_rc "a change without root → exit 8" 8 su -s /bin/sh nobody -c "minidns 
 expect "…with a hint"     "run it with sudo" as_user minidns block add x.example.org
 check  "the credentials file is not readable" bash -c '! su -s /bin/sh nobody -c "cat /etc/minidns/credentials.yaml" 2>/dev/null | grep -q .'
 
-echo "== logs / metrics =="
-minidns block testblocked.example.com >/dev/null
-minidns test testblocked.example.com >/dev/null 2>&1
+echo "== devices, query log, statistics =="
+export LAN_IP="$(hostname -I | awk '{print $1}')"
+jget() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+count_of() { minidns stats top-domains --domain "$1" --exact --json | jget "sum(r['queries'] for r in d['rows'])"; }
+expect "device add"                         "Device \"laptop\" added \($LAN_IP " minidns device add laptop --ip "$LAN_IP" --mac AA:BB:CC:00:11:22 --tag mobile
+expect "device add with a human name"       'Device "This Box" added' minidns device add "This Box" --ip 127.0.0.1 --description "the resolver itself"
+expect_rc "an address has one current owner → exit 5" 5 minidns device add thief --ip "$LAN_IP"
+check  "…and the half-made device is gone"  bash -c '! minidns device list | grep -q thief'
+expect_rc "bad address → exit 3"            3 minidns device add broken --ip 10.0.0.999
+expect "device list"                        "laptop +$LAN_IP \[aa:bb:cc:00:11:22\] +mobile" minidns device list
+expect "device show"                        "description +the resolver itself" minidns device show "this box"
+for _ in 1 2 3; do minidns query count-me.example.org --server "$LAN_IP" >/dev/null; done
+for _ in 1 2;   do minidns query count-me.example.org >/dev/null; done
+minidns query doubleclick.net --server "$LAN_IP" >/dev/null
+minidns query "$LAN_IP" >/dev/null
 sleep 1
-expect "query log has replies" "NOERROR" minidns logs -n 30
-expect "blocked queries logged" "BLOCKED" minidns logs -n 50 --blocked
-expect "top domains ranked" "top domains" minidns top
-expect "top clients ranked" "top clients" minidns top --clients
-expect "stats snapshot works" "cache hits" minidns stats
+expect "stats: totals, top domains, top devices" "Top devices" minidns stats
+expect "…with resolver cache numbers"       "cache hits" minidns stats
+expect "every query is counted once"        "^5$" count_of count-me.example.org
+check  "ingesting again counts nothing twice" bash -c 'minidns query-log ingest --quiet && minidns query-log ingest --quiet'
+expect "…still 5"                           "^5$" count_of count-me.example.org
+expect "top devices uses device names"      "laptop \($LAN_IP\) +3 " minidns stats top-devices --domain count-me.example.org
+expect "…for every device"                  "This Box \(127.0.0.1\) +2 " minidns stats top-devices --domain count-me.example.org
+expect "top domains of one device"          "count-me.example.org +3 " minidns stats top-domains --device laptop
+expect "top blocked, by device, names the list" "adblock-stevenblack" minidns stats blocked --device laptop
+expect "…and the domain"                    "doubleclick.net +1 " minidns stats blocked --device laptop
+expect "top reverse lookups show address and device" "$LAN_IP \(laptop\)" minidns stats reverse
+expect "stats device <name>"                "laptop \($LAN_IP" minidns stats device laptop
+expect "group by registered domain"         "example.org +[0-9]+" minidns stats top-domains --group-by registered --device laptop
+expect "a date range works too"             "count-me.example.org" minidns stats top-domains --from "$(date -d yesterday +%F)" --to "$(date -d tomorrow +%F)"
+expect_rc "a period that ends before it starts → exit 3" 3 minidns stats --from 2026-01-02 --to 2026-01-01
+expect "query-log list by device"           "laptop +A +NOERROR +count-me.example.org" minidns query-log list --device laptop --domain count-me.example.org
+expect "query-log list --blocked"           "laptop +A +BLOCKED \[adblock-stevenblack\] +doubleclick.net" minidns query-log list --blocked --device laptop
+expect "query-log list --json"              "^3$" bash -c 'minidns query-log list --client '"$LAN_IP"' --domain count-me.example.org --json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))"'
+expect_rc "unknown device → exit 4"         4 minidns stats top-domains --device nobody-home
+apt-get install -y -qq logrotate >/dev/null 2>&1
+logrotate -f /etc/logrotate.d/minidns
+for _ in 1 2; do minidns query count-me.example.org --server "$LAN_IP" >/dev/null; done
+sleep 1
+expect "log rotation loses and doubles nothing" "^7$" count_of count-me.example.org
+expect "device rename relabels history"     "Altan.s Laptop \($LAN_IP\) +5 " bash -c 'minidns device rename laptop "Altan'"'"'s Laptop" >/dev/null && minidns stats top-devices --domain count-me.example.org'
+expect "an address can move on; its history stays" "Altan.s Laptop \($LAN_IP\) +5 " bash -c 'minidns device address remove "Altan'"'"'s Laptop" '"$LAN_IP"' >/dev/null && minidns stats top-devices --domain count-me.example.org'
+expect "device remove: queries show under the IP again" "^ +1 +$LAN_IP +5 " bash -c 'minidns device remove "Altan'"'"'s Laptop" >/dev/null && minidns stats top-devices --domain count-me.example.org'
+expect "names pipe straight into block add" "Blocked: count-me.example.org" bash -c "minidns stats top-domains --domain count-me.example.org --exact --json | python3 -c \"import json,sys; [print(r['key']) for r in json.load(sys.stdin)['rows']]\" | minidns block add -"
+expect_rc "--pick needs a terminal → exit 2" 2 minidns stats top-domains --pick
+minidns block remove count-me.example.org >/dev/null
+expect "query-log status"                   "kept for +queries 7 days, hourly counts 35 days, daily counts 400 days" minidns query-log status
+expect "query-log retention"                "individual queries 3 days" minidns query-log retention --events 3d
+expect_rc "retention must be whole days → exit 3" 3 minidns query-log retention --events 2h
+expect "the query log is closed to other users" "^750 " stat -c "%a %n" /var/log/minidns
+check  "…really"                            bash -c '! su -s /bin/sh nobody -c "cat /var/log/minidns/unbound.log" >/dev/null 2>&1'
+expect "the database is private"            "^600 " stat -c "%a %n" /var/lib/minidns/minidns.db
+expect_rc "query data needs root → exit 8"  8 su -s /bin/sh nobody -c "minidns stats"
+expect "doctor checks the database"         "ok  . statistics database +schema current" minidns doctor --no-network
+expect "a backup carries devices and counts, not the queries themselves" "^0$" bash -c 'minidns backup create --output /tmp/with-db.tar.gz >/dev/null && mkdir -p /tmp/dbx && tar xzf /tmp/with-db.tar.gz -C /tmp/dbx && python3 -c "import sqlite3; print(sqlite3.connect(\"/tmp/dbx/var/lib/minidns/minidns.db\").execute(\"select count(*) from query_events\").fetchone()[0])"'
+expect "…the counts are there"              "^[1-9]" python3 -c 'import sqlite3; print(sqlite3.connect("/tmp/dbx/var/lib/minidns/minidns.db").execute("select count(*) from query_rollups").fetchone()[0])'
+expect "query-log disable"                  "Query logging is OFF" minidns query-log disable
+wait_dns
+minidns query after-disable.example.org >/dev/null; sleep 1
+expect "…nothing is recorded any more"      "^0$" count_of after-disable.example.org
+expect "query-log enable shows the privacy notice" "personal data" minidns query-log enable
+wait_dns
+expect "query-log purge --all"              "All stored queries and counts are deleted" minidns query-log purge --all
+expect "…really"                            "^0$" count_of count-me.example.org
+expect "…devices survive a purge"           "This Box" minidns device list
+expect "v0.1 spelling: logs"                "deprecated" minidns logs -n 5
+expect "v0.1 spelling: top"                 "deprecated" minidns top
 minidns exporter --listen 127.0.0.1:9153 >/dev/null 2>&1 &
 sleep 1
 expect "exporter serves unbound metrics" "unbound_total_num_queries" curl -s http://127.0.0.1:9153/metrics
 expect "exporter reports up" "minidns_up 1" curl -s http://127.0.0.1:9153/metrics
+expect "exporter: named metrics"            "^minidns_cache_hit_ratio [0-9.e+-]+$" curl -s http://127.0.0.1:9153/metrics
+expect "exporter: answers by rcode"         'minidns_answers_total\{rcode="NOERROR"\} [0-9]+' curl -s http://127.0.0.1:9153/metrics
+check  "exporter: no domain or client ever appears as a label" bash -c '! curl -s http://127.0.0.1:9153/metrics | grep -E "example\.org|$LAN_IP"'
+expect "exporter runs without root"         "minidns_up 1" bash -c 'su -s /bin/sh unbound -c "minidns exporter --listen 127.0.0.1:9154" >/dev/null 2>&1 & sleep 1; curl -s http://127.0.0.1:9154/metrics'
 
 echo "== apply =="
 expect "apply with nothing to do leaves unbound alone" "no changes" minidns apply

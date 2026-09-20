@@ -3,14 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/awkto/minidns/internal/config"
 	"github.com/awkto/minidns/internal/exporter"
 	"github.com/awkto/minidns/internal/qlog"
-	"github.com/awkto/minidns/internal/unbound"
 )
 
 func printEntry(e qlog.Entry) {
@@ -168,40 +167,6 @@ func cmdTop(args []string) error {
 	return nil
 }
 
-func cmdStats(args []string) error {
-	stats, err := unbound.Stats()
-	if err != nil {
-		return err
-	}
-	get := func(k string) float64 {
-		v, _ := strconv.ParseFloat(stats[k], 64)
-		return v
-	}
-	total := get("total.num.queries")
-	hits := get("total.num.cachehits")
-	ratio := 0.0
-	if total > 0 {
-		ratio = 100 * hits / total
-	}
-	fmt.Printf("uptime            %s\n", (time.Duration(get("time.up")) * time.Second).String())
-	fmt.Printf("queries           %.0f\n", total)
-	fmt.Printf("cache hits        %.0f (%.1f%%)\n", hits, ratio)
-	fmt.Printf("cache misses      %.0f\n", get("total.num.cachemiss"))
-	fmt.Printf("prefetches        %.0f\n", get("total.num.prefetch"))
-	fmt.Printf("avg recursion     %.1fms\n", get("total.recursion.time.avg")*1000)
-	fmt.Printf("msg cache         %.1f MB\n", get("mem.cache.message")/1e6)
-	fmt.Printf("rrset cache       %.1f MB\n", get("mem.cache.rrset")/1e6)
-	for _, k := range []string{"num.answer.rcode.NOERROR", "num.answer.rcode.NXDOMAIN", "num.answer.rcode.SERVFAIL"} {
-		if v, ok := stats[k]; ok {
-			fmt.Printf("%-17s %s\n", k[len("num.answer.rcode."):], v)
-		}
-	}
-	if v, ok := stats["num.rpz.action.nxdomain"]; ok {
-		fmt.Printf("rpz blocked       %s\n", v)
-	}
-	return nil
-}
-
 func cmdExporter(args []string) error {
 	fs := flag.NewFlagSet("exporter", flag.ContinueOnError)
 	listen := fs.String("listen", "", "listen address (default: exporter.listen from config)")
@@ -210,7 +175,13 @@ func cmdExporter(args []string) error {
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		if !os.IsPermission(err) {
+			return err
+		}
+		// the exporter runs unprivileged, and config.yaml is private while a
+		// blocklist URL carries credentials: fall back to the default address
+		fmt.Fprintln(os.Stderr, "warning: config.yaml is not readable by this user; listening on the default address (override with --listen)")
+		cfg = config.Default()
 	}
 	addr := cfg.Exporter.Listen
 	if *listen != "" {

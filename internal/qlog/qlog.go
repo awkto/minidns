@@ -36,6 +36,7 @@ type Entry struct {
 	Cached  bool    // replies only
 	RPZTag  string  // rpz hits only: allow, block, adblock-<list>
 	Action  string  // rpz hits only
+	Rule    string  // rpz hits only: the policy entry that matched (e.g. *.example.com)
 }
 
 // [1691577600] unbound[1234:0] query: 192.168.1.10 example.com. A IN
@@ -43,7 +44,8 @@ type Entry struct {
 var lineRe = regexp.MustCompile(`^\[(\d+)\] unbound\[[^\]]*\] (query|reply): (\S+) (\S+)\. (\S+) \S+(?: (\S+) ([\d.]+) ([01]) \d+)?`)
 
 // [1691577600] unbound[1234:0] info: rpz: applied [block] example.com. rpz-nxdomain 192.168.1.10@40405 ...
-var rpzRe = regexp.MustCompile(`^\[(\d+)\] unbound\[[^\]]*\] info: rpz: applied \[([^\]]+)\] (\S+?)\.? (\S+) (\S+?)@\d+`)
+// (the queried name and type follow the client on unbound 1.17+)
+var rpzRe = regexp.MustCompile(`^\[(\d+)\] unbound\[[^\]]*\] info: rpz: applied \[([^\]]+)\] (\S+?)\.? (\S+) (\S+?)@\d+(?: (\S+?)\.? (\S+) IN)?`)
 
 // ParseLine decodes one log line; ok is false for lines that aren't
 // query/reply/rpz records.
@@ -66,14 +68,19 @@ func ParseLine(line string) (Entry, bool) {
 	}
 	if m := rpzRe.FindStringSubmatch(line); m != nil {
 		ts, _ := strconv.ParseInt(m[1], 10, 64)
-		return Entry{
+		e := Entry{
 			Time:   time.Unix(ts, 0),
 			Kind:   RPZ,
 			RPZTag: m[2],
+			Rule:   strings.ToLower(m[3]),
 			Qname:  strings.ToLower(m[3]),
 			Action: m[4],
 			Client: m[5],
-		}, true
+		}
+		if m[6] != "" {
+			e.Qname, e.Qtype = strings.ToLower(m[6]), m[7]
+		}
+		return e, true
 	}
 	return Entry{}, false
 }

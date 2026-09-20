@@ -26,14 +26,21 @@ step "reverse-zone add"                 "0.20.10.in-addr.arpa"     minidns rever
 step "host add creates A and PTR"       "PTR nas.home.example."    minidns host add nas --ip 10.20.0.10 --zone home.example
 step "forwarder add"                    "1.1.1.1"                  minidns forwarder add 1.1.1.1
 step "block add"                        "Blocked: telemetry.example" minidns block add telemetry.example
-pending v0.3.0 minidns device add laptop --ip 10.20.0.5
+step "device add"                       'Device "laptop" added'    minidns device add laptop --ip 10.20.0.5
+# become 10.20.0.5 for a moment, so there is something to attribute
+ip addr add 10.20.0.5/32 dev lo 2>/dev/null
+step "a query from 10.20.0.5"           "NOERROR"                  minidns query example.org --source 10.20.0.5 --server 10.20.0.5
+step "…and a blocked one"               "NXDOMAIN"                 minidns query telemetry.example --source 10.20.0.5 --server 10.20.0.5
 step "forward record resolves"          "10.20.0.10"               minidns query nas.home.example
 step "reverse record resolves"          "nas.home.example"         minidns query 10.20.0.10
 step "external names resolve through the forwarder" "NOERROR"      minidns query example.org
 step "the blocked name gets the blocking response"  "NXDOMAIN"     minidns query telemetry.example
 step "…and block explain says why"      "manual block"             minidns block explain telemetry.example
-pending v0.3.0 minidns query-log list --device laptop
-pending v0.3.0 minidns stats top-domains --device laptop
+sleep 1
+step "queries from 10.20.0.5 display as laptop" "laptop +A +NOERROR +example.org" minidns query-log list --device laptop
+step "…the blocked one too"             "laptop +A +BLOCKED \[block\] +telemetry.example" minidns query-log list --device laptop
+step "stats top-domains --device"       "example.org +1 "          minidns stats top-domains --device laptop
+ip addr del 10.20.0.5/32 dev lo 2>/dev/null
 step "configuration and zones validate" "Configuration is valid"   minidns config validate
 step "doctor: unbound healthy, nothing failed" " 0 failed"         minidns doctor
 step "unbound is active under systemd"  "^active"                  systemctl is-active unbound

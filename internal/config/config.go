@@ -77,6 +77,11 @@ type Config struct {
 
 	Logging struct {
 		Queries bool `yaml:"queries"`
+		// How long query data is kept in the statistics database, in days
+		// (0 = default): individual queries, per-hour counts, per-day counts.
+		EventsDays int `yaml:"events_days,omitempty"`
+		HourlyDays int `yaml:"hourly_days,omitempty"`
+		DailyDays  int `yaml:"daily_days,omitempty"`
 	} `yaml:"logging"`
 
 	Exporter struct {

@@ -70,12 +70,19 @@ minidns forwarder test                  which forwarders actually answer
 minidns recursion on                    resolve from the roots, skip forwarders
 minidns query nas.home.arpa             look a name up here (--server, --trace, --json)
 
-minidns logs -f                         live query log
-minidns logs --client 192.168.1.23      one device's history
-minidns top --since 24h                 top domains, with counts
-minidns top --clients                   noisiest devices
-minidns top --blocked                   most-blocked domains
-minidns stats                           cache hit rate, latency, rcodes
+minidns device add laptop --ip 192.168.1.23    name a machine (relabels its past queries too)
+minidns stats                           totals, blocked share, top domains, top devices
+minidns stats top-domains --last 7d     also: --device laptop, --from/--to, --type AAAA,
+                                        --group-by registered (subdomains under their domain)
+minidns stats top-devices               who asks the most (names where known, else IPs)
+minidns stats blocked                   most-blocked names, and which list blocked them
+minidns stats reverse                   most looked-up addresses (PTR), with device names
+minidns stats device laptop             one machine: totals, top domains, what gets blocked
+minidns stats top-domains --pick        …and block rows straight from the ranking
+minidns query-log list --device laptop --last 1h      search the log (--blocked, --domain,
+                                        --type, --rcode, --client, --json)
+minidns query-log tail                  follow it live
+minidns query-log status | retention | purge | enable | disable
 ```
 
 Configuration lives in `/etc/minidns/config.yaml`; after editing it by hand,

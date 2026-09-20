@@ -95,7 +95,7 @@ func cloudCmd() *cobra.Command {
 			if tokenFile != "" {
 				raw, err = os.ReadFile(tokenFile)
 			} else {
-				if st, _ := os.Stdin.Stat(); st != nil && st.Mode()&os.ModeCharDevice != 0 {
+				if isTerminal(os.Stdin) {
 					note("paste the token and press Enter, then Ctrl-D:")
 				}
 				raw, err = io.ReadAll(io.LimitReader(os.Stdin, 4096))

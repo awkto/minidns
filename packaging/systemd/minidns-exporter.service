@@ -3,9 +3,23 @@ Description=minidns Prometheus exporter (unbound stats)
 After=unbound.service
 
 [Service]
+# unprivileged: the unbound group may use the control socket, and that is all
+# the exporter needs
+User=unbound
+Group=unbound
 ExecStart=/usr/bin/minidns exporter
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+# AF_NETLINK: unbound-control enumerates interfaces while reading the config
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

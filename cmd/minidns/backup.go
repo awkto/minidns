@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/awkto/minidns/internal/paths"
+	"github.com/awkto/minidns/internal/store"
 	"github.com/awkto/minidns/internal/unbound"
 	"github.com/awkto/minidns/internal/zones"
 )
@@ -43,6 +44,10 @@ func backupSources() []string {
 // createBackup writes a tarball of the state and returns its path. Archive
 // member names are relative to the filesystem root (or MINIDNS_PREFIX).
 func createBackup(label, output string) (string, int, error) {
+	return createBackupWith(label, output, false)
+}
+
+func createBackupWith(label, output string, withQueries bool) (string, int, error) {
 	if output == "" {
 		if err := os.MkdirAll(backupDir(), 0o700); err != nil {
 			return "", 0, err
@@ -106,7 +111,30 @@ func createBackup(label, output string) (string, int, error) {
 			return "", 0, err
 		}
 	}
-	if err := tw.Close(); err == nil {
+	// the statistics database goes in as a consistent snapshot, not as the
+	// live file (which may be mid-write)
+	var err2 error
+	if _, serr := os.Stat(store.File()); serr == nil {
+		snap := output + ".db.tmp"
+		if err2 = store.Snapshot(snap, withQueries); err2 == nil {
+			if info, ierr := os.Stat(snap); ierr == nil {
+				hdr, _ := tar.FileInfoHeader(info, "")
+				hdr.Name = strings.TrimPrefix(store.File(), root)
+				if err2 = tw.WriteHeader(hdr); err2 == nil {
+					if src, oerr := os.Open(snap); oerr == nil {
+						_, err2 = io.Copy(tw, src)
+						src.Close()
+						count++
+					}
+				}
+			}
+		}
+		os.Remove(snap)
+		if err2 != nil {
+			fmt.Fprintln(os.Stderr, "warning: the statistics database is not in this backup:", err2)
+		}
+	}
+	if err = tw.Close(); err == nil {
 		err = gz.Close()
 	}
 	if cerr := f.Close(); err == nil {
@@ -214,6 +242,10 @@ func restoreBackup(archive string) (int, error) {
 			return 0, err
 		}
 		os.Chmod(target+".tmp", m.mode)
+		if target == store.File() { // a write-ahead log of the replaced database must not be replayed onto it
+			os.Remove(target + "-wal")
+			os.Remove(target + "-shm")
+		}
 		if err := os.Rename(target+".tmp", target); err != nil {
 			return 0, err
 		}
@@ -225,10 +257,11 @@ func backupCmd() *cobra.Command {
 	backup := &cobra.Command{Use: "backup", Short: "Back up configuration, zones, overlay records and manual rules"}
 
 	var output string
+	var withQueries bool
 	create := &cobra.Command{
 		Use: "create [--output <file>]", Short: "Write a backup (kept: the last 10 under /var/lib/minidns/backups)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, n, err := createBackup("", output)
+			path, n, err := createBackupWith("", output, withQueries)
 			if err != nil {
 				return err
 			}
@@ -238,6 +271,7 @@ func backupCmd() *cobra.Command {
 		},
 	}
 	create.Flags().StringVar(&output, "output", "", "write the archive here instead")
+	create.Flags().BoolVar(&withQueries, "with-queries", false, "include the individual logged queries (by default only devices and counts are backed up)")
 
 	list := &cobra.Command{
 		Use: "list", Short: "List backups, newest first", Args: cobra.NoArgs,

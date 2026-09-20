@@ -17,6 +17,7 @@ import (
 	"github.com/awkto/minidns/internal/adblock"
 	"github.com/awkto/minidns/internal/config"
 	"github.com/awkto/minidns/internal/paths"
+	"github.com/awkto/minidns/internal/store"
 	"github.com/awkto/minidns/internal/unbound"
 	"github.com/awkto/minidns/internal/zonefile"
 )
@@ -62,6 +63,7 @@ func doctorCmd() *cobra.Command {
 					d.checkForwarders(cfg)
 				}
 				d.checkHousekeeping(cfg)
+				d.checkDatabase(cfg)
 			}
 			fails, warns := 0, 0
 			for _, f := range d.findings {
@@ -332,8 +334,8 @@ func (d *doctor) checkHousekeeping(cfg *config.Config) {
 	if !systemdBooted() {
 		d.skip("timers", "this host does not run systemd")
 	} else {
-		want := map[string]bool{"minidns-adblock.timer": cfg.Adblock.Enabled && len(cfg.Adblock.Lists) > 0, "minidns-zonesync.timer": len(cfg.CloudZones) > 0}
-		for _, unit := range []string{"minidns-adblock.timer", "minidns-zonesync.timer"} {
+		want := map[string]bool{"minidns-adblock.timer": cfg.Adblock.Enabled && len(cfg.Adblock.Lists) > 0, "minidns-zonesync.timer": len(cfg.CloudZones) > 0, "minidns-ingest.timer": cfg.Logging.Queries}
+		for _, unit := range []string{"minidns-adblock.timer", "minidns-zonesync.timer", "minidns-ingest.timer"} {
 			if !want[unit] {
 				continue
 			}
@@ -372,6 +374,46 @@ func (d *doctor) checkHousekeeping(cfg *config.Config) {
 			d.warn("log rotation", "query logging is on but /etc/logrotate.d/minidns is missing — the log will grow without bound", "reinstall the minidns package")
 		}
 	}
+}
+
+// checkDatabase looks at the statistics database. Trouble here never affects
+// DNS service, so nothing in it is worse than a warning — except a schema
+// from the future, which means an older minidns is running against it.
+func (d *doctor) checkDatabase(cfg *config.Config) {
+	if !d.root {
+		d.skip("statistics database", "needs root (query data is private)")
+		return
+	}
+	if _, err := os.Stat(store.File()); err != nil {
+		if cfg.Logging.Queries {
+			d.warn("statistics database", "does not exist yet", "it is created by the first `minidns stats` or by minidns-ingest.timer")
+		}
+		return
+	}
+	s, err := store.Open()
+	if err != nil {
+		d.fail("statistics database", err.Error()+" (DNS service is not affected)", "restore it from a backup, or move "+store.File()+" away — it is rebuilt from the logs that are still on disk")
+		return
+	}
+	defer s.Close()
+	fp := s.Footprint()
+	var size int64
+	if st, err := os.Stat(store.File()); err == nil {
+		size = st.Size()
+	}
+	detail := fmt.Sprintf("schema current, %.0f MB, %d queries and %d count rows", float64(size)/1e6, fp.Events, fp.RollupRows)
+	switch {
+	case cfg.Logging.Queries && fp.NewestEvent > 0 && time.Since(time.Unix(fp.NewestEvent, 0)) > time.Hour && logIsFresh():
+		d.warn("statistics database", detail+"; but nothing was ingested for over an hour although queries are being logged", "systemctl status minidns-ingest.timer; sudo minidns query-log ingest")
+	default:
+		d.ok("statistics database", detail)
+	}
+}
+
+// logIsFresh reports whether unbound wrote to the query log in the last hour.
+func logIsFresh() bool {
+	st, err := os.Stat(paths.QueryLog())
+	return err == nil && time.Since(st.ModTime()) < time.Hour
 }
 
 func systemdBooted() bool {

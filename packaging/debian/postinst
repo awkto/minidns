@@ -5,6 +5,11 @@ mkdir -p /etc/minidns /var/lib/minidns/rpz /var/lib/minidns/zones /var/log/minid
 if getent passwd unbound >/dev/null 2>&1; then
     chown unbound:unbound /var/log/minidns
 fi
+# the query log says who looked up what: not for every local user
+if getent group adm >/dev/null 2>&1; then
+    chgrp adm /var/log/minidns
+fi
+chmod 0750 /var/log/minidns
 
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
@@ -16,6 +21,15 @@ if [ "$1" = "configure" ] && [ -n "$2" ] && [ -f /etc/minidns/config.yaml ]; the
     # leaves unbound alone when the generated config is unchanged.
     echo "minidns: upgraded from $2 — re-applying configuration"
     minidns apply || echo "minidns: WARNING: apply failed; the previous unbound config is still active. Run 'sudo minidns apply' to see why." >&2
+    # units that are new in this version: enable them on hosts that were set
+    # up with `minidns install` (recognisable by the timers it enabled)
+    if [ -d /run/systemd/system ] && systemctl is-enabled --quiet minidns-adblock.timer 2>/dev/null; then
+        systemctl enable --now minidns-ingest.timer >/dev/null 2>&1 || true
+    fi
+    # pick up the new binary (and unit) if the exporter is running
+    if [ -d /run/systemd/system ]; then
+        systemctl try-restart minidns-exporter.service >/dev/null 2>&1 || true
+    fi
 else
     echo ""
     echo "minidns installed. Run:  sudo minidns install"

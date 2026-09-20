@@ -1,0 +1,8 @@
+[Unit]
+Description=minidns query log ingestion (log → statistics database)
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/bin/minidns query-log ingest --quiet

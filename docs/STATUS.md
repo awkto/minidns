@@ -4,7 +4,7 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 
 | Spec | Requirement | State | Notes / issue |
 |---|---|---|---|
-| §5.1 | Single source of truth, no silent drift | partial | files canonical (D3); no SQLite yet #43 |
+| §5.1 | Single source of truth, no silent drift | complete | files canonical (D3); SQLite holds only devices, query data and cursors (#43, D8) |
 | §5.3 | Narrow privilege | complete | read-only commands run without root (config.yaml 0644, token in root-only credentials.yaml); changes need sudo, exit 8 (#67 #56) |
 | §6 | Targets, SSH remote, default rules | missing | #50 #51 #52 #53 |
 | §7.1 | `install` | complete | platform gate, safe re-run, listen/ACL/privacy report (#25); `setup` deprecated |
@@ -18,11 +18,11 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §9.2 | Records | complete | `record add/list/remove`, 9 types, `--managed-by` (#65) |
 | §9.3 | Reverse zones, `host` | complete | `reverse-zone add`, `host add/rename/remove` |
 | §10 | `query` | complete | `--server`, `--trace`, `--full`, `--json`, reverse by IP (#36); `test` kept |
-| §11 | Devices | missing | #46 |
-| §12 | Query log: enable/tail/list | partial | `logs` with `--client/--blocked/--since`; text re-parse, IP only → #44 #47 |
-| §12.3 | Bounded storage, rotation, retention | partial | logrotate 30 d; no SQLite, no purge #45 |
-| §12.4 | Privacy notice | missing | #25 #47 |
-| §13 | Statistics | partial | `top`, `stats`; slow, no device/date-range/rollups → #48 |
+| §11 | Devices | complete | `device add|list|show|rename|set|remove`, `device address add|remove`; time-bounded addresses, attribution at read time (#46) |
+| §12 | Query log: enable/tail/list | complete | `query-log list|tail|enable|disable|status|retention|purge` with all §12.2 filters (#47); incremental, rotation-safe ingestion (#44) |
+| §12.3 | Bounded storage, rotation, retention | complete | queries 7 d, hourly counts 35 d, daily counts 400 d, all configurable; daily prune; `purge` (#45) |
+| §12.4 | Privacy notice | complete | at `install` and `query-log enable`; log dir 0750, database 0600, backups leave individual queries out |
+| §13 | Statistics | complete | `stats`, `top-domains`, `top-devices`, `blocked`, `reverse`, `device <name>`; periods, device/client/type/domain filters, registered-domain grouping, `--json` (#48); exporter metrics with bounded labels (#49) |
 | §14.1 | Manual blocks (RPZ) | complete | `block add|remove|list|test|explain` (#38); NXDOMAIN is the only action |
 | §14.2 | Subscribed blocklists | complete | `blocklist …` with per-list enable/disable and status (#39); safe refresh with last-known-good (#40) |
 | §14.3 | Allowlist precedence | complete | allow zone rendered first |
@@ -38,7 +38,7 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §20.1 | Unit tests | partial | rpz + qlog only; render golden tests #19 |
 | §20.2 | Integration tests on a real engine | partial | `scripts/e2e.sh` (Ubuntu only, manual) → CI matrix #18 |
 | §20.3 | Remote target tests | missing | #52 |
-| §20.4 | Acceptance scenario | partial | `scripts/acceptance.sh` passes on both VMs; the device/query-log/stats steps are pending v0.3 (#37) |
+| §20.4 | Acceptance scenario | complete | `scripts/acceptance.sh`, every step, on systemd VMs (#37) |
 | §21 | Packaging (deb amd64/arm64, units, apt repo) | complete | upgrade re-render #13, upgrade harness #20 |
 | — | DoT upstream, serve-expired, Prometheus exporter | complete | kept (Amendment 4); derived metrics #49 |
 | §3.3 | BIND engine, minidhcp, external sinks, per-device policy | deferred | #59 #60 #61 #62 |

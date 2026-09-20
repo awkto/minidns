@@ -120,6 +120,14 @@ func cmdSetup(args []string) error {
 		}
 	}
 	chownUnbound(paths.LogDir())
+	// the query log says who looked up what: owner unbound, readable by the
+	// log-reading group, closed to everybody else
+	if g, err := user.LookupGroup("adm"); err == nil {
+		if gid, err := strconv.Atoi(g.Gid); err == nil {
+			os.Chown(paths.LogDir(), -1, gid)
+		}
+	}
+	os.Chmod(paths.LogDir(), 0o750)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -185,7 +193,7 @@ func cmdSetup(args []string) error {
 	}
 
 	// timers ship in the deb; running from source without them is fine
-	for _, unit := range []string{"minidns-adblock.timer", "minidns-zonesync.timer"} {
+	for _, unit := range []string{"minidns-adblock.timer", "minidns-zonesync.timer", "minidns-ingest.timer"} {
 		exec.Command("systemctl", "enable", "--now", unit).Run()
 	}
 	if cfg.Exporter.Enabled {

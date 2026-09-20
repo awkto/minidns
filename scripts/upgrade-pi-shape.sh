@@ -19,8 +19,8 @@ expect() { local d="$1" p="$2"; shift 2; "$@" >/tmp/out 2>&1; if grep -qE "$p" /
 wait_dns() { for _ in $(seq 1 60); do minidns test localhost >/dev/null 2>&1 && return 0; sleep 0.5; done; echo "unbound did not come back"; return 1; }
 
 echo "== build the Pi's shape on v0.1.0 =="
-curl -fsSL -o /tmp/old.deb "https://github.com/awkto/minidns/releases/download/v0.1.0/minidns_0.1.0_${ARCH}.deb" || exit 1
-apt-get install -y -qq /tmp/old.deb >/dev/null 2>&1 || apt-get install -y /tmp/old.deb
+OLDDEB="$(mktemp -d)/old.deb"; curl -fsSL -o "$OLDDEB" "https://github.com/awkto/minidns/releases/download/v0.1.0/minidns_0.1.0_${ARCH}.deb" || exit 1
+apt-get install -y -qq "$OLDDEB" >/dev/null 2>&1 || apt-get install -y "$OLDDEB"
 mkdir -p /etc/minidns
 ( umask 077; printf '%s' "$DIGITALOCEAN_TOKEN" > /etc/minidns/do.token )
 cat > /etc/minidns/config.yaml <<CONF
@@ -98,13 +98,17 @@ check  "zonesync unit runs with the new binary" systemctl start minidns-zonesync
 check  "blocklist unit runs with the new binary" systemctl start minidns-adblock.service
 expect "exporter still serves metrics"         "minidns_up 1" curl -s http://127.0.0.1:9153/metrics
 expect "exporter unit active"                  "^active" systemctl is-active minidns-exporter.service
+expect "…and no longer runs as root"           "^unbound" bash -c 'ps -o user= -p "$(systemctl show -p MainPID --value minidns-exporter.service)"'
+expect "exporter: named metrics"               "^minidns_cache_hit_ratio" curl -s http://127.0.0.1:9153/metrics
+check  "ingest timer enabled by the upgrade"   systemctl is-active --quiet minidns-ingest.timer
+expect "statistics start with what v0.1.0 logged" "$ZONE_HOST" minidns stats top-domains --last 1h
 expect "cloud zone list"                       "$ZONE +digitalocean" minidns cloud zone list
 expect "doctor: nothing failed"                " 0 failed" minidns doctor
 expect "unbound still the same process after all of it" "^$UNBOUND_PID\$" systemctl show -p MainPID --value unbound
 
 echo "== rollback to v0.1.0 (docs/ROLLOUT.md) =="
 cp /etc/minidns/config.yaml.pre-v0.2 /etc/minidns/config.yaml
-apt-get install -y --allow-downgrades /tmp/old.deb >/dev/null 2>&1
+apt-get install -y --allow-downgrades "$OLDDEB" >/dev/null 2>&1
 wait_dns
 expect "v0.1.0 runs again"                     "v0.1.0" minidns version
 expect "replica answers after rollback"        "rcode +NOERROR" minidns test "$ZONE_HOST"

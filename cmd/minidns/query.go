@@ -29,14 +29,26 @@ type queryResult struct {
 
 // exchange sends one question, retrying over TCP when the answer was truncated.
 func exchange(server, name string, qtype uint16, recurse bool) (*dns.Msg, time.Duration, error) {
+	return exchangeFrom("", server, name, qtype, recurse)
+}
+
+// exchangeFrom sends the question from a specific local address ("" = let
+// the system choose), which is how a query shows up as a particular client.
+func exchangeFrom(source, server, name string, qtype uint16, recurse bool) (*dns.Msg, time.Duration, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(name), qtype)
 	m.RecursionDesired = recurse
 	m.SetEdns0(1232, true)
 	c := &dns.Client{Timeout: 5 * time.Second}
+	if source != "" {
+		c.Dialer = &net.Dialer{Timeout: 5 * time.Second, LocalAddr: &net.UDPAddr{IP: net.ParseIP(source)}}
+	}
 	resp, rtt, err := c.Exchange(m, server)
 	if err == nil && resp.Truncated {
 		c.Net = "tcp"
+		if source != "" {
+			c.Dialer = &net.Dialer{Timeout: 5 * time.Second, LocalAddr: &net.TCPAddr{IP: net.ParseIP(source)}}
+		}
 		resp, rtt, err = c.Exchange(m, server)
 	}
 	return resp, rtt, err
@@ -84,7 +96,7 @@ func serverArg(s string) (string, error) {
 }
 
 func queryCmd() *cobra.Command {
-	var server string
+	var server, source string
 	var trace, full bool
 	cmd := &cobra.Command{
 		Use: "query <name|ip> [type]", Short: "Look a name up on this server (or another one)", Args: cobra.RangeArgs(1, 2),
@@ -120,7 +132,12 @@ func queryCmd() *cobra.Command {
 					return err
 				}
 			}
-			resp, rtt, err := exchange(target, name, qtype, true)
+			if source != "" {
+				if _, err := netip.ParseAddr(source); err != nil {
+					return fmt.Errorf("%w: --source %q is not an IP address", zones.ErrInvalid, source)
+				}
+			}
+			resp, rtt, err := exchangeFrom(source, target, name, qtype, true)
 			if err != nil {
 				return connError{fmt.Errorf("no answer from %s: %s", target, shortNetErr(err))}
 			}
@@ -147,6 +164,7 @@ func queryCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", "", "ask this server instead of the local one (address, address:port or name)")
+	cmd.Flags().StringVar(&source, "source", "", "send the query from this local address (to see what that client would get)")
 	cmd.Flags().BoolVar(&trace, "trace", false, "resolve step by step from the root servers, bypassing this server")
 	cmd.Flags().BoolVar(&full, "full", false, "print the complete response, dig-style")
 	markReadOnly(cmd)
