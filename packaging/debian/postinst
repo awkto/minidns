@@ -10,9 +10,17 @@ if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
 fi
 
-echo ""
-echo "minidns installed. Run:  sudo minidns setup"
-echo ""
+if [ "$1" = "configure" ] && [ -n "$2" ] && [ -f /etc/minidns/config.yaml ]; then
+    # upgrade: regenerate the unbound config with the new renderer. apply
+    # validates first and keeps the previous config if validation fails, and
+    # leaves unbound alone when the generated config is unchanged.
+    echo "minidns: upgraded from $2 — re-applying configuration"
+    minidns apply || echo "minidns: WARNING: apply failed; the previous unbound config is still active. Run 'sudo minidns apply' to see why." >&2
+else
+    echo ""
+    echo "minidns installed. Run:  sudo minidns setup"
+    echo ""
+fi
 
 #DEBHELPER#
 exit 0

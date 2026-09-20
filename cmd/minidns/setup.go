@@ -74,6 +74,9 @@ func cmdSetup(args []string) error {
 
 	setupAppArmor()
 	ensureTrustAnchor()
+	if os.Getenv("MINIDNS_PREFIX") == "" {
+		freePort53(cfg)
+	}
 
 	if cfg.Adblock.Enabled && len(cfg.Adblock.Lists) > 0 {
 		fmt.Println("==> downloading adblock lists")
@@ -125,8 +128,15 @@ func cmdApply(reload bool) error {
 	if err != nil {
 		return err
 	}
-	if err := unbound.WriteConf(unbound.Render(cfg)); err != nil {
+	rendered := unbound.Render(cfg)
+	current, _ := os.ReadFile(paths.UnboundConfFile())
+	if err := unbound.WriteConf(rendered); err != nil {
 		return err
+	}
+	if reload && string(current) == rendered && unbound.Active() {
+		// nothing for the daemon to pick up — keep its cache warm
+		fmt.Println("applied (no changes)")
+		return nil
 	}
 	if reload && unbound.Active() {
 		// restart rather than reload: some options (tls-cert-bundle) are

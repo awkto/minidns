@@ -18,6 +18,19 @@ case "$1" in
         ;;
 esac
 
+# give port 53 back to systemd-resolved if setup took it (see resolved.go)
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    if [ -f /etc/systemd/resolved.conf.d/minidns.conf ]; then
+        rm -f /etc/systemd/resolved.conf.d/minidns.conf
+        if [ "$(readlink /etc/resolv.conf 2>/dev/null)" = "/run/systemd/resolve/resolv.conf" ]; then
+            ln -sfn ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl restart systemd-resolved 2>/dev/null || true
+        fi
+    fi
+fi
+
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
 fi

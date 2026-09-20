@@ -95,6 +95,7 @@ func WriteConf(content string) error {
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 		return err
 	}
+	os.Chmod(target, 0o644) // readable by the unbound user whatever root's umask is
 	if err := CheckConf(); err != nil {
 		if hadOld == nil {
 			os.WriteFile(target, old, 0o644)

@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"syscall"
 )
 
 var version = "dev"
@@ -57,7 +58,17 @@ func main() {
 		usage()
 		os.Exit(0)
 	}
+	// unbound runs unprivileged and has to read what we write; don't let a
+	// restrictive root umask make zone and config files unreadable
+	syscall.Umask(0o022)
+
 	cmd, args := os.Args[1], os.Args[2:]
+	if !readOnly[cmd] {
+		if err := lockState(); err != nil {
+			fmt.Fprintln(os.Stderr, "minidns:", err)
+			os.Exit(1)
+		}
+	}
 	var err error
 	switch cmd {
 	case "setup":
