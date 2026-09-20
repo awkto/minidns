@@ -67,7 +67,7 @@ func Render(c *config.Config) string {
 	w("  # RPZ needs the respip module")
 	w("  module-config: \"respip validator iterator\"")
 	w("")
-	if c.UpstreamTLS {
+	if usesTLS(c) {
 		if bundle := caBundle(); bundle != "" {
 			w("")
 			w("  # CA bundle to validate DoT upstream certificates")
@@ -106,6 +106,23 @@ func Render(c *config.Config) string {
 		}
 	}
 
+	if forwardsToLoopback(c) {
+		w("")
+		w("  # a forwarder on this host (e.g. a local DoH/DNSCrypt proxy)")
+		w("  do-not-query-localhost: no")
+	}
+
+	// Zone forwarders need the same two exceptions: corp and RFC 1918 reverse
+	// names are typically private, unsigned, and shadowed by built-in zones.
+	if len(c.ZoneForwarders) > 0 {
+		w("")
+		w("  # zones forwarded to their own servers")
+		for _, zf := range zoneForwarders(c) {
+			w("  local-zone: %q transparent", zf.Zone+".")
+			w("  domain-insecure: %q", zf.Zone+".")
+		}
+	}
+
 	// RPZ zones: first match wins across zones in config order, so the
 	// allowlist comes first, then manual blocks, then adblock lists.
 	rpz := func(name, file, tag string) {
@@ -125,7 +142,9 @@ func Render(c *config.Config) string {
 	if c.Adblock.Enabled {
 		names := make([]string, 0, len(c.Adblock.Lists))
 		for _, l := range c.Adblock.Lists {
-			names = append(names, l.Name)
+			if !l.Disabled {
+				names = append(names, l.Name)
+			}
 		}
 		sort.Strings(names)
 		for _, n := range names {
@@ -172,6 +191,18 @@ func Render(c *config.Config) string {
 		}
 	}
 
+	for _, zf := range zoneForwarders(c) {
+		w("")
+		w("forward-zone:")
+		w("  name: %q", zf.Zone+".")
+		if zf.TLS {
+			w("  forward-tls-upstream: yes")
+		}
+		for _, u := range zf.Servers {
+			w("  forward-addr: %s", formatUpstream(u, zf.TLS))
+		}
+	}
+
 	if !confDHasRemoteControl() {
 		w("")
 		w("remote-control:")
@@ -180,6 +211,40 @@ func Render(c *config.Config) string {
 	}
 
 	return b.String()
+}
+
+func forwardsToLoopback(c *config.Config) bool {
+	all := [][]string{}
+	if !c.Recursion {
+		all = append(all, c.Upstreams)
+	}
+	for _, zf := range c.ZoneForwarders {
+		all = append(all, zf.Servers)
+	}
+	for _, list := range all {
+		for _, u := range list {
+			if f, err := config.ParseForwarder(u); err == nil && f.Addr.IsLoopback() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func usesTLS(c *config.Config) bool {
+	for _, zf := range c.ZoneForwarders {
+		if zf.TLS {
+			return true
+		}
+	}
+	return c.UpstreamTLS
+}
+
+// zoneForwarders returns the zone forwarders in a stable order.
+func zoneForwarders(c *config.Config) []config.ZoneForwarder {
+	out := append([]config.ZoneForwarder(nil), c.ZoneForwarders...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Zone < out[j].Zone })
+	return out
 }
 
 // localZones returns the configured local zones that have a zone file, in
@@ -209,18 +274,25 @@ func slabs(threads int) int {
 // "ip@port#authname"; with TLS on, bare IPs get port 853 and a known auth
 // name for the big public resolvers.
 func formatUpstream(u string, tls bool) string {
-	if !tls || strings.Contains(u, "@") {
+	f, err := config.ParseForwarder(u)
+	if err != nil || !tls {
 		return u
 	}
 	authNames := map[string]string{
 		"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
+		"2606:4700:4700::1111": "cloudflare-dns.com", "2606:4700:4700::1001": "cloudflare-dns.com",
 		"8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
+		"2001:4860:4860::8888": "dns.google", "2001:4860:4860::8844": "dns.google",
 		"9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net",
+		"2620:fe::fe": "dns.quad9.net", "2620:fe::9": "dns.quad9.net",
 	}
-	if name, ok := authNames[u]; ok {
-		return u + "@853#" + name
+	if f.Port == 0 {
+		f.Port = 853
 	}
-	return u + "@853"
+	if f.AuthName == "" {
+		f.AuthName = authNames[f.Addr.String()]
+	}
+	return f.String()
 }
 
 // caBundlePaths are the places a system CA bundle may live.

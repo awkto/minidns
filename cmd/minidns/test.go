@@ -2,15 +2,12 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
 
 	"github.com/awkto/minidns/internal/config"
-	"github.com/awkto/minidns/internal/paths"
-	"github.com/awkto/minidns/internal/rpz"
 )
 
 func cmdTest(args []string) error {
@@ -33,40 +30,7 @@ func cmdTest(args []string) error {
 	}
 
 	// static verdict from the RPZ files, so the user sees *why*
-	verdict := ""
-	if entry, ok := rpz.Contains(paths.AllowRPZ(), name); ok {
-		verdict = fmt.Sprintf("allowlisted (matches %s)", entry)
-	} else if entry, ok := rpz.Contains(paths.BlockRPZ(), name); ok && cfg.Firewall.Enabled {
-		verdict = fmt.Sprintf("blocked by firewall (matches %s)", entry)
-	} else if cfg.Adblock.Enabled {
-		// unbound applies the lists in sorted-name order (see unbound.Render)
-		names := make([]string, 0, len(cfg.Adblock.Lists))
-		for _, l := range cfg.Adblock.Lists {
-			names = append(names, l.Name)
-		}
-		sort.Strings(names)
-		for _, n := range names {
-			if entry, ok := rpz.Contains(paths.AdblockRPZ(n), name); ok {
-				verdict = fmt.Sprintf("blocked by adblock list %q (matches %s)", n, entry)
-				break
-			}
-		}
-	}
-	for _, lz := range cfg.LocalZones {
-		if name == lz || strings.HasSuffix(name, "."+lz) {
-			verdict = "served from local zone " + lz
-		}
-	}
-	if z := matchZone(cfg, name); z != nil {
-		suffix := ""
-		if verdict != "" {
-			suffix = "; " + verdict
-		}
-		verdict = fmt.Sprintf("served from local mirror of %s%s", z.Name, suffix)
-	}
-	if verdict == "" {
-		verdict = "not blocked"
-	}
+	verdict := explain(cfg, name).oneLine()
 
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(name), qtype)

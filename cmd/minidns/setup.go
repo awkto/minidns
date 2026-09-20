@@ -82,7 +82,7 @@ func cmdSetup(args []string) error {
 	if cfg.Adblock.Enabled && len(cfg.Adblock.Lists) > 0 {
 		fmt.Println("==> downloading adblock lists")
 		for _, l := range cfg.Adblock.Lists {
-			n, _, err := adblock.Update(l)
+			n, _, err := adblock.Update(l, false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "    %s: %v (continuing; retry with `minidns adblock update`)\n", l.Name, err)
 				continue
@@ -139,7 +139,12 @@ func cmdApplyQuiet() error {
 	if string(current) == rendered || !unbound.Active() {
 		return nil
 	}
-	if err := unbound.Reload(); err != nil {
+	// a reload keeps the process; options only read at startup need a restart
+	activate := unbound.Reload
+	if startupOptions(string(current)) != startupOptions(rendered) {
+		activate = unbound.Restart
+	}
+	if err := activate(); err != nil {
 		// put the previous config back so the daemon can start again
 		if len(current) > 0 {
 			os.WriteFile(paths.UnboundConfFile(), current, 0o644)
@@ -148,6 +153,21 @@ func cmdApplyQuiet() error {
 		return err
 	}
 	return nil
+}
+
+// startupOptions extracts the generated options unbound reads only when it
+// starts (a reload ignores changes to them).
+func startupOptions(conf string) string {
+	var out []string
+	for _, line := range strings.Split(conf, "\n") {
+		t := strings.TrimSpace(line)
+		for _, opt := range []string{"tls-cert-bundle:", "interface:", "port:", "num-threads:", "module-config:"} {
+			if strings.HasPrefix(t, opt) {
+				out = append(out, t)
+			}
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // persistMigration rewrites a config that still used v0.1 keys, keeping the

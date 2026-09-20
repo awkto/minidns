@@ -7,11 +7,20 @@
 - **Records**: `record add|list|remove` for A, AAAA, CNAME, MX, TXT, NS, SRV, CAA and PTR — values are validated by parsing them, TXT is quoted/split for you, CNAME coexistence is enforced, adding the same record twice is a no-op. `--ttl`, `--managed-by <tool>` (for minidhcp and friends).
 - **Reverse zones and hosts**: `reverse-zone add <cidr>` (IPv4 and IPv6), `host add|rename|remove` manages A/AAAA and the matching PTRs together.
 - **Overlay records on a cloud replica**: `cloud zone overlay enable <zone>` lets `record` and `host` add local-only records on top of a read-only replica (e.g. LAN device names under your public domain). The provider's zone is never written to; its pristine copy, the overlay and the merged served file are kept apart and re-merged on every sync. An overlay record hides a provider record of the same name and type (and says so). `record list <replica>` shows every record with its source.
+- **Forwarders**: `forwarder add|remove|list|test`, global or `--zone <suffix|reverse zone>` (IPv4/IPv6, `ip@port#tls-name`, `--tls`). Zone forwarders work in both resolver modes and get the private-zone exceptions they need (`local-zone transparent`, `domain-insecure`); a forwarder on 127.0.0.1 works. `forwarder test` asks each server directly and tells unreachable from refused from fine — an unreachable private forwarder is still valid configuration.
+- **`query <name|ip> [type]`** with `--server`, `--trace` (walks the delegation from the roots), `--full`, `--json`. An IP address is looked up in reverse.
+- **`block add|remove|list|test|explain`**, **`allow add|remove|list`**. `block explain <name>` reports whether the name is blocked, the matching rule, where it comes from (manual block or which subscribed list), any allowlist override, and matches in rule sets that are switched off.
+- **`blocklist add|list|status|update|enable|disable|remove`** for subscribed lists, with per-list enable/disable.
+- **Safe blocklist refreshes**: downloads are size-limited; every format — native RPZ feeds included — is reduced to validated domain names and re-rendered (a feed can only ever add blocks); an empty, unparseable or implausibly shrunken download (less than half the active list) is refused and the active copy kept; if unbound does not come back with the new data the previous files are restored. Last attempt, last success, entry count and last error are recorded (`blocklist status`). Credentials in private list URLs are never printed.
 - Every record change hot-reloads just that zone (cache untouched), verifies unbound serves the new serial, and rolls the file back if it doesn't.
 - `--json` on the new commands and a documented, stable exit-code table (2 usage, 3 invalid, 4 not found, 5 conflict, 6 apply failed, …). Shell completion via `minidns completion`.
 
 ### Changed
 - **`zone` now means local zones.** The DigitalOcean replicas moved to `cloud zone add|list|sync|remove` (+ `cloud provider list`). `zone sync` and `zone add --provider` still work with a deprecation warning. `config.yaml`'s `zones:` key is migrated to `cloud_zones:` on upgrade; the original is kept as `config.yaml.pre-v0.2`.
+
+- `upstream`, `block <domain>`, `unblock`, `allow <domain>`, `unallow`, `blocklist` (no verb) and `adblock …` keep working with a deprecation warning. The blocklist timer now calls `blocklist update`.
+- Configuration changes made by the new commands are transactional: validated, applied, and `config.yaml` plus the generated unbound config restored if unbound rejects them.
+- With DNS-over-TLS, forwarders given as `ip@853` now also get the well-known TLS name of Cloudflare/Google/Quad9 (their certificates are actually verified); IPv6 addresses of the same providers are recognized.
 
 ## v0.1.1 — 2026-09-20
 

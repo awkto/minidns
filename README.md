@@ -44,11 +44,14 @@ package.
 minidns status                          what's running, what's blocked, what's mirrored
 minidns test doubleclick.net            resolve locally + explain the policy verdict
 
-minidns block ads.example.com           firewall: block a domain + subdomains
-minidns allow good.example.com          allowlist (always wins)
+minidns block add ads.example.com       block a domain + subdomains
+minidns allow add good.example.com      allowlist (always wins)
+minidns block explain www.example.com   blocked? by which rule, from which list?
 
-minidns adblock update                  refresh lists now (timer does this daily)
-minidns adblock list add https://big.oisd.nl/rpz --name oisd --format rpz
+minidns blocklist add oisd --url https://big.oisd.nl/rpz --format rpz
+minidns blocklist update                refresh now (a timer does this daily; a bad
+                                        download never replaces the active copy)
+minidns blocklist status                last attempt / success / entries / error
 
 minidns zone add home.arpa              your own authoritative zone
 minidns reverse-zone add 10.20.0.0/24   ...and the reverse zone for the LAN
@@ -60,8 +63,11 @@ minidns cloud zone add example.com      read-only replica of a DigitalOcean zone
 minidns cloud zone overlay enable example.com   allow local-only records on top of the replica
 minidns cloud zone sync                 pull fresh copies (timer: every 5 min)
 
-minidns upstream set 9.9.9.9 --tls      change forwarders (DNS-over-TLS)
+minidns forwarder add 9.9.9.9 --tls     global forwarders (DNS-over-TLS)
+minidns forwarder add 10.20.0.53 --zone corp.example   one suffix to its own server
+minidns forwarder test                  which forwarders actually answer
 minidns recursion on                    resolve from the roots, skip forwarders
+minidns query nas.home.arpa             look a name up here (--server, --trace, --json)
 
 minidns logs -f                         live query log
 minidns logs --client 192.168.1.23      one device's history
@@ -85,7 +91,7 @@ providers:
     token: dop_v1_...
 ```
 
-`minidns zone add example.com` pulls the full zone file from the DO API and
+`minidns cloud zone add example.com` pulls the full zone file from the DO API and
 unbound serves it authoritatively to your LAN. A systemd timer re-syncs every
 5 minutes and hot-reloads only when the zone actually changed — so if your
 ISP (or DigitalOcean) is unreachable, `example.com` still resolves at home.

@@ -78,6 +78,13 @@ expect "block still enforced"        "rcode +NXDOMAIN" minidns test blocked.upgr
 expect "allowlist still wins"        "rcode +NOERROR"  minidns test doubleclick.net
 expect "DoT upstream kept"           "DNS-over-TLS"    minidns upstream
 expect "resolution works"            "rcode +NOERROR"  minidns test example.org
+if minidns forwarder list >/dev/null 2>&1; then   # v0.2+ spellings see the same state
+  expect "block list (v0.2) shows it"     "^blocked.upgrade.example$" minidns block list
+  expect "allow list (v0.2) shows it"     "^doubleclick.net$"         minidns allow list
+  expect "forwarder list (v0.2) shows DoT" "1.1.1.1 +DNS-over-TLS"    minidns forwarder list --global
+  expect "blocklist list (v0.2) shows the subscription" "stevenblack +enabled" minidns blocklist list
+  expect "block explain (v0.2)"           "BLOCKED"                   minidns block explain blocked.upgrade.example
+fi
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
   ZL="zone list"; ZS="zone sync"
   minidns cloud zone list >/dev/null 2>&1 && { ZL="cloud zone list"; ZS="cloud zone sync"; }   # v0.2+ spelling
@@ -96,6 +103,9 @@ if [ "$SYSTEMD" = yes ]; then
   check "adblock timer still enabled"  systemctl is-enabled --quiet minidns-adblock.timer
   check "zonesync timer still enabled" systemctl is-enabled --quiet minidns-zonesync.timer
   check "unbound active"               systemctl is-active --quiet unbound
+  check "blocklist refresh unit runs with the new binary" systemctl start minidns-adblock.service
+  check "replica sync unit runs with the new binary"      systemctl start minidns-zonesync.service
+  check "unbound still active after both"                 systemctl is-active --quiet unbound
 fi
 
 echo; echo "RESULT: $PASS passed, $FAIL failed"

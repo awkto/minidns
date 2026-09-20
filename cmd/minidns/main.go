@@ -35,6 +35,11 @@ func legacy(use, short, group string, readOnly bool, run func([]string) error) *
 	return c
 }
 
+func hide(c *cobra.Command) *cobra.Command {
+	c.Hidden = true
+	return c
+}
+
 func markReadOnly(cmds ...*cobra.Command) {
 	for _, c := range cmds {
 		if c.Annotations == nil {
@@ -80,6 +85,14 @@ func rootCmd() *cobra.Command {
 		c.GroupID = groupDNS
 	}
 
+	forwarder, query := forwarderCmd(), queryCmd()
+	forwarder.GroupID, query.GroupID = groupResolver, groupResolver
+
+	block, allow, blocklist := blockCmd(), allowCmd(), blocklistCmd()
+	for _, c := range []*cobra.Command{block, allow, blocklist} {
+		c.GroupID = groupFilter
+	}
+
 	root.AddCommand(
 		legacy("setup", "First run: config, unbound, timers, lists", groupSetup, false, cmdSetup),
 		legacy("apply", "Regenerate the unbound config and reload", groupSetup, false, func([]string) error { return cmdApply(true) }),
@@ -88,14 +101,13 @@ func rootCmd() *cobra.Command {
 
 		zone, record, rzone, host, cloud,
 
-		legacy("block <domain>...", "Block a domain (and its subdomains)", groupFilter, false, cmdBlock),
-		legacy("unblock <domain>...", "Remove a manual block", groupFilter, false, cmdUnblock),
-		legacy("allow <domain>...", "Allowlist a domain (wins over all blocking)", groupFilter, false, cmdAllow),
-		legacy("unallow <domain>...", "Remove from the allowlist", groupFilter, false, cmdUnallow),
-		legacy("blocklist", "Show manual blocks and allows", groupFilter, true, cmdBlocklist),
-		legacy("adblock status|on|off|update|list", "Subscribed blocklists", groupFilter, false, cmdAdblock),
+		block, allow, blocklist,
+		hide(legacy("unblock <domain>...", "Remove a manual block", groupFilter, false, cmdUnblock)),
+		hide(legacy("unallow <domain>...", "Remove from the allowlist", groupFilter, false, cmdUnallow)),
+		hide(legacy("adblock status|on|off|update|list", "Subscribed blocklists", groupFilter, false, cmdAdblock)),
 
-		legacy("upstream [set <addr>... [--tls]]", "Show or set upstream forwarders", groupResolver, false, cmdUpstream),
+		forwarder, query,
+		hide(legacy("upstream [set <addr>... [--tls]]", "Show or set upstream forwarders", groupResolver, false, cmdUpstream)),
 		legacy("recursion on|off|status", "Full recursion instead of forwarding", groupResolver, false, cmdRecursion),
 
 		legacy("logs [-n N] [-f] [--client IP] [--blocked]", "Query log", groupObserve, true, cmdLogs),

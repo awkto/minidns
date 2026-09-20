@@ -11,22 +11,22 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §7.2 | Secure defaults (closed recursion, no AXFR, hide version) | complete | RFC1918 ACLs, hide-identity/version; IPv6 ACLs #22 |
 | §7.3 | `status` | complete | |
 | §7.3 | `doctor`, `config validate/diff` | missing | #29 #27 |
-| §8 | Global forwarders | partial | `upstream set` (replace-all, DoT) → `forwarder` family #35 |
-| §8 | Zone-specific forwarders | missing | #35 |
+| §8 | Global forwarders | complete | `forwarder add|remove|list|test`, DoT, IPv6 (#35); `upstream` deprecated |
+| §8 | Zone-specific forwarders | complete | `--zone`, forward and reverse, both resolver modes (#35) |
 | §8 | Recursion mode | complete | `recursion on|off` kept (D7) |
 | §9.1 | Local authoritative zones | complete | `zone add/list/show/remove` (v0.2 branch) |
 | §9.2 | Records | complete | `record add/list/remove`, 9 types, `--managed-by` (#65) |
 | §9.3 | Reverse zones, `host` | complete | `reverse-zone add`, `host add/rename/remove` |
-| §10 | `query` | partial | exists as `test` (no `--server/--trace/--json`) #36 |
+| §10 | `query` | complete | `--server`, `--trace`, `--full`, `--json`, reverse by IP (#36); `test` kept |
 | §11 | Devices | missing | #46 |
 | §12 | Query log: enable/tail/list | partial | `logs` with `--client/--blocked/--since`; text re-parse, IP only → #44 #47 |
 | §12.3 | Bounded storage, rotation, retention | partial | logrotate 30 d; no SQLite, no purge #45 |
 | §12.4 | Privacy notice | missing | #25 #47 |
 | §13 | Statistics | partial | `top`, `stats`; slow, no device/date-range/rollups → #48 |
-| §14.1 | Manual blocks (RPZ) | complete* | *wildcard-loss bug #10; noun-verb #38 |
-| §14.2 | Subscribed blocklists | partial | works + daily jittered timer; enable/disable/status #39, staged safety #40 |
+| §14.1 | Manual blocks (RPZ) | complete | `block add|remove|list|test|explain` (#38); NXDOMAIN is the only action |
+| §14.2 | Subscribed blocklists | complete | `blocklist …` with per-list enable/disable and status (#39); safe refresh with last-known-good (#40) |
 | §14.3 | Allowlist precedence | complete | allow zone rendered first |
-| §14.3 | `block explain` | partial | verdict inside `test`; list order bug #16; #41 |
+| §14.3 | `block explain` | complete | rule, origin, allow override, switched-off matches (#41) |
 | §15 | Cloud replicas, read-only | partial | DigitalOcean under `cloud zone …`; validated before activation; opt-in local overlay records (#68); status/diff/LKG #55 |
 | §15.3 | Credential handling | partial | 0600 config or token_file/env; #56 |
 | §15.4 | More providers | missing | Cloudflare #5, Route 53 #57, Azure #58 |

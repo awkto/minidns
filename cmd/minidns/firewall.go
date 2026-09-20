@@ -47,21 +47,11 @@ func editRPZ(path, action, zoneName string, add, remove []string) error {
 	return nil
 }
 
-func cmdBlock(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: minidns block <domain>...")
-	}
-	if err := editRPZ(paths.BlockRPZ(), rpz.ActionBlock, "block.rpz.minidns.", args, nil); err != nil {
-		return err
-	}
-	fmt.Printf("blocked: %v (and subdomains)\n", args)
-	return nil
-}
-
 func cmdUnblock(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: minidns unblock <domain>...")
+		return fmt.Errorf("usage: minidns block remove <domain>...")
 	}
+	deprecated("unblock", "block remove")
 	if err := editRPZ(paths.BlockRPZ(), rpz.ActionBlock, "block.rpz.minidns.", nil, args); err != nil {
 		return err
 	}
@@ -69,21 +59,11 @@ func cmdUnblock(args []string) error {
 	return nil
 }
 
-func cmdAllow(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: minidns allow <domain>...")
-	}
-	if err := editRPZ(paths.AllowRPZ(), rpz.ActionPassthru, "allow.rpz.minidns.", args, nil); err != nil {
-		return err
-	}
-	fmt.Printf("allowed: %v (overrides firewall and adblock)\n", args)
-	return nil
-}
-
 func cmdUnallow(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: minidns unallow <domain>...")
+		return fmt.Errorf("usage: minidns allow remove <domain>...")
 	}
+	deprecated("unallow", "allow remove")
 	if err := editRPZ(paths.AllowRPZ(), rpz.ActionPassthru, "allow.rpz.minidns.", nil, args); err != nil {
 		return err
 	}

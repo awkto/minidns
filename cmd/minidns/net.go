@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"strings"
 
 	"github.com/awkto/minidns/internal/config"
@@ -13,6 +12,7 @@ func cmdUpstream(args []string) error {
 	if err != nil {
 		return err
 	}
+	deprecated("upstream", "forwarder add|remove|list|test")
 	if len(args) == 0 {
 		tls := ""
 		if cfg.UpstreamTLS {
@@ -40,14 +40,12 @@ func cmdUpstream(args []string) error {
 	if len(addrs) == 0 {
 		return fmt.Errorf("usage: minidns upstream set <addr>... [--tls]")
 	}
-	for _, a := range addrs {
-		host := a
-		if i := strings.IndexAny(host, "@#"); i >= 0 {
-			host = host[:i]
+	for i, a := range addrs {
+		f, err := config.ParseForwarder(a)
+		if err != nil {
+			return err
 		}
-		if net.ParseIP(host) == nil {
-			return fmt.Errorf("%q is not an IP address (use ip, ip@port, or ip@port#tlsname)", a)
-		}
+		addrs[i] = f.String()
 	}
 	cfg.Upstreams = addrs
 	cfg.UpstreamTLS = tls

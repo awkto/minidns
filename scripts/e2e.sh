@@ -54,38 +54,80 @@ echo "== resolution =="
 expect "google.com resolves NOERROR" "rcode +NOERROR" minidns test google.com
 expect "cache hit is fast" "rcode +NOERROR" minidns test google.com
 
-echo "== firewall =="
-minidns block facebook.com >/dev/null
+echo "== manual blocks and the allowlist =="
+expect "block add"                       "Blocked: facebook.com" minidns block add facebook.com
 expect "blocked domain returns NXDOMAIN" "rcode +NXDOMAIN" minidns test facebook.com
-expect "policy verdict names firewall" "blocked by firewall" minidns test facebook.com
-expect "subdomain blocked via wildcard" "rcode +NXDOMAIN" minidns test www.facebook.com
-minidns unblock facebook.com >/dev/null
-expect "unblock restores resolution" "rcode +NOERROR" minidns test facebook.com
+expect "policy verdict names firewall"   "blocked by firewall" minidns test facebook.com
+expect "subdomain blocked via wildcard"  "rcode +NXDOMAIN" minidns test www.facebook.com
+expect "block add again is a no-op"      "Already present" minidns block add facebook.com
+expect "block explain names rule and origin" "matching rule +\*\.facebook\.com" minidns block explain www.facebook.com
+expect "block explain --json"            '"blocked": true' minidns block explain www.facebook.com --json
+expect "block test agrees with the server" "server answers +NXDOMAIN" minidns block test www.facebook.com
+expect "block list"                      "^facebook.com$" minidns block list
+expect_rc "only nxdomain is advertised → exit 3" 3 minidns block add x.example.org --action redirect
+expect "block remove"                    "Removed from the block list: facebook.com" minidns block remove facebook.com
+expect "…restores resolution"            "rcode +NOERROR" minidns test facebook.com
+expect_rc "removing what is not there → exit 4" 4 minidns block remove facebook.com
 # explicit wildcards used to vanish on the next edit (#10)
-minidns block '*.wild.example.org' >/dev/null
-minidns block other.example.org >/dev/null
-expect "explicit wildcard survives a later edit" "^block \*\.wild\.example\.org" minidns blocklist
+minidns block add '*.wild.example.org' >/dev/null
+minidns block add other.example.org >/dev/null
+expect "explicit wildcard survives a later edit" "^\*\.wild\.example\.org" minidns block list
 expect "explicit wildcard blocks subdomains" "rcode +NXDOMAIN" minidns test a.wild.example.org
-minidns unblock '*.wild.example.org' other.example.org >/dev/null
-expect "invalid domain rejected" "doesn't look like a domain" minidns block 'bad domain'
+minidns block remove '*.wild.example.org' other.example.org >/dev/null
+expect_rc "invalid domain rejected → exit 3" 3 minidns block add 'bad domain'
 
-echo "== adblock =="
+echo "== subscribed blocklists =="
 expect "adblock domain NXDOMAIN" "rcode +NXDOMAIN" minidns test doubleclick.net
 expect "verdict names the list" "blocked by adblock list" minidns test doubleclick.net
-minidns allow doubleclick.net >/dev/null
-expect "allowlist overrides adblock" "rcode +NOERROR" minidns test doubleclick.net
-minidns unallow doubleclick.net >/dev/null
-# flags after the positional, exactly as the README shows them (#11)
-printf '0.0.0.0 listed.e2e.example.net\n' > /tmp/e2e-list.txt
-( cd /tmp && python3 -m http.server 8099 >/dev/null 2>&1 & ) ; sleep 1
+expect "explain names the blocklist"     'subscribed blocklist "stevenblack"' minidns block explain doubleclick.net
+expect "allow add"                       "Allowed: doubleclick.net" minidns allow add doubleclick.net
+expect "allowlist overrides the blocklist" "rcode +NOERROR" minidns test doubleclick.net
+expect "explain shows the override"      'overrides +blocklist "stevenblack"' minidns block explain doubleclick.net
+expect "allow list"                      "^doubleclick.net$" minidns allow list
+expect "allow remove"                    "Removed from the allow list" minidns allow remove doubleclick.net
+mkdir -p /tmp/lists; printf '0.0.0.0 listed.e2e.example.net\n' > /tmp/lists/e2e-list.txt
+( cd /tmp/lists && python3 -m http.server 8099 >/dev/null 2>&1 & ) ; sleep 1
 wait_dns
-expect "list add accepts flags after the url" "added list e2e" minidns adblock list add http://127.0.0.1:8099/e2e-list.txt --name e2e --format hosts
+expect "blocklist add"                   'Blocklist "e2e" added \(1 domains\)' minidns blocklist add e2e --url http://127.0.0.1:8099/e2e-list.txt --format hosts
 wait_dns
-expect "second list blocks its domain" "blocked by adblock list \"e2e\"" minidns test listed.e2e.example.net
-check  "update accepts --quiet" minidns adblock update --quiet
-expect "list remove works" "removed list e2e" minidns adblock list remove e2e
+expect "second list blocks its domain"   "blocked by adblock list \"e2e\"" minidns test listed.e2e.example.net
+expect "blocklist update: unchanged"     "e2e: 1 domains \(unchanged\)" minidns blocklist update e2e
+echo "<html>rate limited</html>" > /tmp/lists/e2e-list.txt
+expect_rc "a bad download is refused"    1 minidns blocklist update e2e
+expect "…the last good copy keeps blocking" "rcode +NXDOMAIN" minidns test listed.e2e.example.net
+expect "…and status records the error"   "last error +.*parsed 0 domains" minidns blocklist status e2e
+printf '0.0.0.0 listed.e2e.example.net\n0.0.0.0 second.e2e.example.net\n' > /tmp/lists/e2e-list.txt
+expect "blocklist update: changed"       "e2e: 2 domains \(changed\)" minidns blocklist update e2e
 wait_dns
-expect "unsafe list name rejected" "invalid list name" minidns adblock list add http://127.0.0.1:8099/e2e-list.txt --name ../../evil
+expect "…new entry is blocked"           "rcode +NXDOMAIN" minidns test second.e2e.example.net
+expect "…status is clean again"          "entries +2 active" minidns blocklist status e2e
+expect "blocklist disable <name>"        'Blocklist "e2e" disabled' minidns blocklist disable e2e
+wait_dns
+expect "…its names resolve again"        "not blocked|rcode +NOERROR|NXDOMAIN" minidns test second.e2e.example.net
+expect "…explain says it is switched off" "switched off" minidns block explain second.e2e.example.net
+expect "blocklist list shows the state"  "e2e +disabled" minidns blocklist list
+expect "blocklist enable <name>"         'Blocklist "e2e" enabled' minidns blocklist enable e2e
+wait_dns
+expect "blocklist list --json"           '"active_entries": 2' minidns blocklist list --json
+expect "blocklist remove"                'Blocklist "e2e" removed' minidns blocklist remove e2e
+wait_dns
+expect_rc "unsafe list name rejected → exit 3" 3 minidns blocklist add ../../evil --url http://127.0.0.1:8099/e2e-list.txt
+expect "a private URL's credentials never show" "REDACTED@127.0.0.1" bash -c 'minidns blocklist add private --url http://user:s3cret@127.0.0.1:8099/e2e-list.txt >/dev/null 2>&1; minidns blocklist status private; minidns blocklist remove private >/dev/null'
+wait_dns
+
+echo "== v0.1 spellings still work, with a warning =="
+expect "block <domain>"        "deprecated" minidns block legacy.example.org
+expect "…and it blocks"        "rcode +NXDOMAIN" minidns test legacy.example.org
+expect "blocklist (no verb)"   "^block legacy.example.org" minidns blocklist
+expect "unblock"               "deprecated" minidns unblock legacy.example.org
+expect "allow <domain>"        "deprecated" minidns allow legacy.example.org
+expect "unallow"               "deprecated" minidns unallow legacy.example.org
+expect "adblock list add <url> --name" "added list old" minidns adblock list add http://127.0.0.1:8099/e2e-list.txt --name old --format hosts
+wait_dns
+check  "adblock update --quiet" minidns adblock update --quiet
+expect "adblock list remove"   "removed list old" minidns adblock list remove old
+wait_dns
+expect "upstream"              "deprecated" minidns upstream
 
 echo "== local zones and records =="
 expect "zone add creates an authoritative zone" 'Zone "home.arpa" added' minidns zone add home.arpa
@@ -212,18 +254,76 @@ else
   echo "SKIP: zone mirror checks (no DIGITALOCEAN_TOKEN)"
 fi
 
-echo "== upstream / recursion toggles =="
+echo "== forwarders, recursion, query =="
+# a second resolver on this host stands in for an internal DNS server
+cat > /tmp/corp-dns.conf <<'CONF'
+server:
+  interface: 127.0.0.1
+  port: 5353
+  do-daemonize: yes
+  pidfile: /tmp/corp-dns.pid
+  use-syslog: no
+  logfile: /tmp/corp-dns.log
+  chroot: ""
+  username: ""
+  access-control: 127.0.0.0/8 allow
+  local-zone: "corp.example." static
+  local-data: "corp.example. 300 IN SOA ns.corp.example. root.corp.example. 1 3600 600 86400 300"
+  local-data: "intranet.corp.example. 300 IN A 10.99.0.1"
+  local-zone: "30.10.in-addr.arpa." static
+  local-data: "30.10.in-addr.arpa. 300 IN SOA ns.corp.example. root.corp.example. 1 3600 600 86400 300"
+  local-data-ptr: "10.30.0.5 host5.corp.example"
+remote-control:
+  control-enable: no
+CONF
+unbound -c /tmp/corp-dns.conf
+expect "forwarder list shows the defaults"   "1.1.1.1" minidns forwarder list --global
+expect "forwarder add --zone"                "Added corp.example forwarder" minidns forwarder add 127.0.0.1@5353 --zone corp.example
+wait_dns
+expect "zone forwarder resolves an internal name" "10.99.0.1" minidns query intranet.corp.example
+expect "forwarder add --zone <reverse zone>"  "Added 30.10.in-addr.arpa forwarder" minidns forwarder add 127.0.0.1@5353 --zone 30.10.in-addr.arpa
+wait_dns
+expect "query <ip> does the reverse lookup through it" "host5.corp.example" minidns query 10.30.0.5
+expect "forwarder add again is a no-op"      "Already configured" minidns forwarder add 127.0.0.1@5353 --zone corp.example
+expect "forwarder list separates the sections" "Zone forwarders" minidns forwarder list
+expect "forwarder list --zone --json"        '"zone": "corp.example"' minidns forwarder list --zone corp.example --json
+expect "forwarder test --zone: ok"           "corp.example +127.0.0.1@5353 +ok" minidns forwarder test --zone corp.example
+expect_rc "invalid address → exit 3"         3 minidns forwarder add not-an-ip
+expect_rc "a zone served here cannot be forwarded → exit 5" 5 bash -c 'minidns zone add fwd-clash.example >/dev/null && minidns forwarder add 10.0.0.1 --zone fwd-clash.example'
+minidns zone remove fwd-clash.example --force >/dev/null; wait_dns
+# an unreachable private forwarder is valid configuration; only `test` complains
+expect "unreachable forwarder is accepted"   "Added lab.example forwarder" minidns forwarder add 192.0.2.53 --zone lab.example
+wait_dns
+expect_rc "forwarder test reports it → exit 7" 7 minidns forwarder test --zone lab.example
+expect "…as unreachable, not invalid"        "unreachable" minidns forwarder test --zone lab.example
+expect "forwarder remove --zone"             "Removed lab.example forwarder" minidns forwarder remove 192.0.2.53 --zone lab.example
+expect_rc "removing an unknown forwarder → exit 4" 4 minidns forwarder remove 192.0.2.99
+expect "global forwarder add (IPv6 too)"     "Added global forwarder.*2620:fe::fe" minidns forwarder add 9.9.9.9 2620:fe::fe
+expect "global forwarder remove"             "Removed global" minidns forwarder remove 9.9.9.9 2620:fe::fe
+expect_rc "the last global forwarder cannot go while forwarding → exit 5" 5 minidns forwarder remove 1.1.1.1 1.0.0.1 8.8.8.8
+wait_dns
 expect "recursion on applies" "recursion: on" minidns recursion on
 wait_dns
 expect "recursion resolves from roots" "rcode +NOERROR" minidns test example.org
+expect "zone forwarders still apply under recursion" "10.99.0.1" minidns query intranet.corp.example
+expect "forwarder list says globals are idle" "NOT in use" minidns forwarder list
 expect "recursion off applies" "recursion: off" minidns recursion off
 wait_dns
-expect "DoT upstream applies" "tls: true" minidns upstream set 1.1.1.1 1.0.0.1 --tls
+minidns forwarder remove 127.0.0.1@5353 --zone corp.example >/dev/null
+minidns forwarder remove 127.0.0.1@5353 --zone 30.10.in-addr.arpa >/dev/null
+wait_dns
+expect "query --server asks another resolver" "@1.1.1.1:53 → NOERROR" minidns query example.org --server 1.1.1.1
+expect "query --json"                        '"rcode": "NOERROR"' minidns query example.org --json
+expect "query --trace walks from the roots"  "referral to org." minidns query example.org --trace
+expect_rc "query to a dead server → exit 7"  7 minidns query example.org --server 192.0.2.1
+expect "DoT forwarders apply" "Added global forwarder" minidns forwarder add 9.9.9.9 --tls
 # no systemd in the container, so mimic what minidns does on real hosts:
 # a full restart (tls-cert-bundle is only read at startup)
 unbound-control stop >/dev/null 2>&1; sleep 1
 unbound -c /etc/unbound/unbound.conf; wait_dns
 expect "resolution over DoT works" "rcode +NOERROR" minidns test cloudflare.com
+expect "forwarder test speaks DoT"  "9.9.9.9 +ok" minidns forwarder test
+kill "$(cat /tmp/corp-dns.pid)" 2>/dev/null
 
 echo "== logs / metrics =="
 minidns block testblocked.example.com >/dev/null

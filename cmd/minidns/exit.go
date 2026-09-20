@@ -39,9 +39,12 @@ func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(forma
 func exitCodeFor(err error) int {
 	var ae applyError
 	var ue usageError
+	var ce connError
 	switch {
 	case err == nil:
 		return exitOK
+	case errors.As(err, &ce):
+		return exitConnection
 	case errors.As(err, &ue):
 		return exitUsage
 	case errors.As(err, &ae):

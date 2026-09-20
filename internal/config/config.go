@@ -18,6 +18,8 @@ type BlockList struct {
 	Name   string `yaml:"name"`
 	URL    string `yaml:"url"`
 	Format string `yaml:"format"` // hosts | domains | rpz
+	// Disabled keeps the subscription but stops applying (and refreshing) it.
+	Disabled bool `yaml:"disabled,omitempty"`
 }
 
 type Zone struct {
@@ -36,6 +38,9 @@ type Config struct {
 	Upstreams   []string `yaml:"upstreams"`    // forward-addr targets; ip[@port][#authname]
 	UpstreamTLS bool     `yaml:"upstream_tls"` // DNS-over-TLS to upstreams
 	Recursion   bool     `yaml:"recursion"`    // true = full recursion, no forwarding
+
+	// ZoneForwarders apply in either resolver mode.
+	ZoneForwarders []ZoneForwarder `yaml:"zone_forwarders,omitempty"`
 
 	Threads      int `yaml:"threads"`        // 0 = one per CPU
 	MsgCacheMB   int `yaml:"msg_cache_mb"`   //
@@ -147,6 +152,27 @@ func (c *Config) Validate() error {
 	for _, z := range c.CloudZones {
 		if len(z.Name) > 253 || !zoneNameRe.MatchString(z.Name) {
 			return fmt.Errorf("cloud zone name %q is invalid", z.Name)
+		}
+	}
+	for _, u := range c.Upstreams {
+		if _, err := ParseForwarder(u); err != nil {
+			return fmt.Errorf("upstreams: %w", err)
+		}
+	}
+	for _, zf := range c.ZoneForwarders {
+		if len(zf.Zone) > 253 || !zoneNameRe.MatchString(zf.Zone) {
+			return fmt.Errorf("zone forwarder name %q is invalid", zf.Zone)
+		}
+		if len(zf.Servers) == 0 {
+			return fmt.Errorf("zone forwarder %q has no servers", zf.Zone)
+		}
+		for _, u := range zf.Servers {
+			if _, err := ParseForwarder(u); err != nil {
+				return fmt.Errorf("zone forwarder %s: %w", zf.Zone, err)
+			}
+		}
+		if c.FindZone(zf.Zone) != nil || c.HasLocalZone(zf.Zone) {
+			return fmt.Errorf("%q is served from this host and cannot also be forwarded", zf.Zone)
 		}
 	}
 	for _, z := range c.LocalZones {
