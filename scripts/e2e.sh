@@ -20,6 +20,10 @@ expect() { # expect <desc> <pattern> <cmd...>
   if grep -qE "$pat" /tmp/out; then ok "$desc"; else bad "$desc (no /$pat/)"; sed 's/^/    /' /tmp/out | head -15; fi
 }
 
+# unbound reloads the big RPZ zones on every config change and refuses
+# connections while it does — poll instead of guessing a sleep
+wait_dns() { for _ in $(seq 1 60); do minidns test localhost >/dev/null 2>&1 && return 0; sleep 0.5; done; echo "unbound did not come back within 30s"; return 1; }
+
 export DEBIAN_FRONTEND=noninteractive
 echo "== install =="
 apt-get update -qq >/dev/null
@@ -37,7 +41,7 @@ check "unbound-checkconf accepts config" unbound-checkconf
 echo "== start unbound (no systemd in container) =="
 unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1
 unbound -c /etc/unbound/unbound.conf
-sleep 2
+wait_dns
 check "unbound is answering" minidns test google.com
 
 echo "== resolution =="
@@ -68,10 +72,13 @@ minidns unallow doubleclick.net >/dev/null
 # flags after the positional, exactly as the README shows them (#11)
 printf '0.0.0.0 listed.e2e.example.net\n' > /tmp/e2e-list.txt
 ( cd /tmp && python3 -m http.server 8099 >/dev/null 2>&1 & ) ; sleep 1
+wait_dns
 expect "list add accepts flags after the url" "added list e2e" minidns adblock list add http://127.0.0.1:8099/e2e-list.txt --name e2e --format hosts
+wait_dns
 expect "second list blocks its domain" "blocked by adblock list \"e2e\"" minidns test listed.e2e.example.net
 check  "update accepts --quiet" minidns adblock update --quiet
 expect "list remove works" "removed list e2e" minidns adblock list remove e2e
+wait_dns
 expect "unsafe list name rejected" "invalid list name" minidns adblock list add http://127.0.0.1:8099/e2e-list.txt --name ../../evil
 
 echo "== zone mirror (digitalocean) =="
@@ -87,14 +94,15 @@ fi
 
 echo "== upstream / recursion toggles =="
 expect "recursion on applies" "recursion: on" minidns recursion on
-sleep 1
+wait_dns
 expect "recursion resolves from roots" "rcode +NOERROR" minidns test example.org
 expect "recursion off applies" "recursion: off" minidns recursion off
+wait_dns
 expect "DoT upstream applies" "tls: true" minidns upstream set 1.1.1.1 1.0.0.1 --tls
 # no systemd in the container, so mimic what minidns does on real hosts:
 # a full restart (tls-cert-bundle is only read at startup)
 unbound-control stop >/dev/null 2>&1; sleep 1
-unbound -c /etc/unbound/unbound.conf; sleep 1
+unbound -c /etc/unbound/unbound.conf; wait_dns
 expect "resolution over DoT works" "rcode +NOERROR" minidns test cloudflare.com
 
 echo "== logs / metrics =="

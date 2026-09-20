@@ -16,10 +16,13 @@ ok()  { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 check()  { local d="$1"; shift; if "$@" >/tmp/out 2>&1; then ok "$d"; else bad "$d"; sed 's/^/    /' /tmp/out | head -15; fi; }
 expect() { local d="$1" p="$2"; shift 2; "$@" >/tmp/out 2>&1; if grep -qE "$p" /tmp/out; then ok "$d"; else bad "$d (no /$p/)"; sed 's/^/    /' /tmp/out | head -15; fi; }
+# unbound reloads the big RPZ zones on every config change and refuses
+# connections while it does — poll instead of guessing a sleep
+wait_dns() { for _ in $(seq 1 60); do minidns test localhost >/dev/null 2>&1 && return 0; sleep 0.5; done; echo "unbound did not come back within 30s"; return 1; }
 SYSTEMD=no; [ -d /run/systemd/system ] && SYSTEMD=yes
 restart_unbound() { # containers only — on systemd hosts minidns does this itself
   [ "$SYSTEMD" = yes ] && return
-  unbound-control stop >/dev/null 2>&1; sleep 1; unbound -c /etc/unbound/unbound.conf; sleep 1
+  unbound-control stop >/dev/null 2>&1; sleep 1; unbound -c /etc/unbound/unbound.conf
 }
 
 export DEBIAN_FRONTEND=noninteractive
@@ -31,17 +34,19 @@ curl -fsSL -o "$OLD" "https://github.com/awkto/minidns/releases/download/${FROM_
 apt-get install -y -qq "$OLD" >/dev/null 2>&1 || apt-get install -y "$OLD"
 expect "old version installed" "${FROM_VERSION}" minidns version
 minidns setup 2>&1 | tail -3
-[ "$SYSTEMD" = no ] && { unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1; unbound -c /etc/unbound/unbound.conf; sleep 2; }
+[ "$SYSTEMD" = no ] && { unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1; unbound -c /etc/unbound/unbound.conf; }
+wait_dns
 
 echo "== build state on $FROM_VERSION =="
 minidns block blocked.upgrade.example >/dev/null
 minidns allow doubleclick.net >/dev/null
-minidns upstream set 1.1.1.1 1.0.0.1 --tls >/dev/null; restart_unbound
+minidns upstream set 1.1.1.1 1.0.0.1 --tls >/dev/null; restart_unbound; wait_dns
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
   ( umask 077; printf '%s' "$DIGITALOCEAN_TOKEN" > /etc/minidns/do.token )
   sed -i 's|token_file: ""|token_file: /etc/minidns/do.token|' /etc/minidns/config.yaml
   minidns zone add "${E2E_ZONE:-dnsif.ca}" >/dev/null 2>&1
 fi
+wait_dns
 expect "pre-upgrade: block works"     "rcode +NXDOMAIN" minidns test blocked.upgrade.example
 expect "pre-upgrade: resolution works" "rcode +NOERROR"  minidns test example.org
 cp /etc/unbound/unbound.conf.d/minidns.conf /tmp/minidns.conf.before
@@ -53,6 +58,7 @@ apt-get install -y "$CANDIDATE" 2>&1 | grep -E "minidns:|Unpacking|Setting up mi
 NEW="$(dpkg-deb -f "$CANDIDATE" Version)"
 expect "new version installed" "${NEW%%~*}" minidns version
 
+wait_dns
 echo "== state survived =="
 check  "config.yaml untouched"            cmp /tmp/config.yaml.before /etc/minidns/config.yaml
 check  "unbound-checkconf accepts config" unbound-checkconf
