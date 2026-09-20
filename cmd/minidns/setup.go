@@ -16,6 +16,7 @@ import (
 	"github.com/awkto/minidns/internal/paths"
 	"github.com/awkto/minidns/internal/rpz"
 	"github.com/awkto/minidns/internal/unbound"
+	"github.com/awkto/minidns/internal/zones"
 )
 
 // apparmorLocal is appended to the local unbound AppArmor override on
@@ -122,12 +123,55 @@ func cmdSetup(args []string) error {
 	return nil
 }
 
+// cmdApplyQuiet renders the config and, if it changed, reloads unbound and
+// waits for it — without the restart cmdApply does (no startup-only option
+// is involved when zones come and go) and without printing anything.
+func cmdApplyQuiet() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	rendered := unbound.Render(cfg)
+	current, _ := os.ReadFile(paths.UnboundConfFile())
+	if err := unbound.WriteConf(rendered); err != nil {
+		return err
+	}
+	if string(current) == rendered || !unbound.Active() {
+		return nil
+	}
+	if err := unbound.Reload(); err != nil {
+		// put the previous config back so the daemon can start again
+		if len(current) > 0 {
+			os.WriteFile(paths.UnboundConfFile(), current, 0o644)
+			unbound.Reload()
+		}
+		return err
+	}
+	return nil
+}
+
+// persistMigration rewrites a config that still used v0.1 keys, keeping the
+// original next to it.
+func persistMigration(cfg *config.Config) {
+	if !cfg.Migrated {
+		return
+	}
+	if old, err := os.ReadFile(paths.ConfigFile()); err == nil {
+		os.WriteFile(paths.ConfigFile()+".pre-v0.2", old, 0o600)
+	}
+	if err := config.Save(cfg); err == nil {
+		fmt.Println("config migrated to the v0.2 layout (zones: → cloud_zones:); previous file kept as config.yaml.pre-v0.2")
+		cfg.Migrated = false
+	}
+}
+
 // cmdApply regenerates the unbound config fragment and (optionally) reloads.
 func cmdApply(reload bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	persistMigration(cfg)
 	rendered := unbound.Render(cfg)
 	current, _ := os.ReadFile(paths.UnboundConfFile())
 	if err := unbound.WriteConf(rendered); err != nil {
@@ -200,15 +244,22 @@ func cmdStatus(args []string) error {
 		fmt.Println("adblock     off")
 	}
 
-	if len(cfg.Zones) == 0 {
-		fmt.Println("zones       none mirrored")
+	for _, z := range cfg.LocalZones {
+		if lz, err := zones.Load(z); err == nil {
+			fmt.Printf("zone        %s (local) — %d records, serial %d\n", z, len(lz.UserRecords()), lz.Serial)
+		} else {
+			fmt.Printf("zone        %s (local) — UNREADABLE: %v\n", z, err)
+		}
 	}
-	for _, z := range cfg.Zones {
+	if len(cfg.CloudZones) == 0 && len(cfg.LocalZones) == 0 {
+		fmt.Println("zones       none")
+	}
+	for _, z := range cfg.CloudZones {
 		p := paths.ZoneFile(z.Name)
 		if st, err := os.Stat(p); err == nil {
-			fmt.Printf("zone        %s (%s) — synced %s\n", z.Name, z.Provider, ago(st.ModTime()))
+			fmt.Printf("zone        %s (replica of %s) — synced %s\n", z.Name, z.Provider, ago(st.ModTime()))
 		} else {
-			fmt.Printf("zone        %s (%s) — NOT SYNCED YET\n", z.Name, z.Provider)
+			fmt.Printf("zone        %s (replica of %s) — NOT SYNCED YET\n", z.Name, z.Provider)
 		}
 	}
 

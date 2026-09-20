@@ -10,13 +10,6 @@ import (
 	"github.com/awkto/minidns/internal/paths"
 )
 
-// readOnly lists the commands that never write state, so they don't queue
-// behind a running list update or zone sync.
-var readOnly = map[string]bool{
-	"status": true, "test": true, "blocklist": true, "logs": true, "top": true,
-	"stats": true, "exporter": true, "version": true,
-}
-
 // lockState takes an exclusive lock for the life of the process so the
 // adblock/zonesync timers and an interactive command can't rewrite the same
 // files (or render the unbound config) at the same moment. The kernel drops

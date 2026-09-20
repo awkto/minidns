@@ -30,4 +30,12 @@ func AdblockRPZ(list string) string {
 	return filepath.Join(RPZDir(), "adblock-"+list+".rpz")
 }
 
+// ZoneFile is the served copy of a cloud-zone replica.
 func ZoneFile(zone string) string { return filepath.Join(ZoneDir(), zone+".zone") }
+
+// Local authoritative zones (owned by minidns, edited with `minidns record`)
+// live apart from the replicas so the two can never overwrite each other.
+func LocalZoneDir() string { return filepath.Join(ZoneDir(), "local") }
+func LocalZoneFile(zone string) string {
+	return filepath.Join(LocalZoneDir(), zone+".zone")
+}

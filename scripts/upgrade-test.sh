@@ -65,7 +65,12 @@ expect "new version installed" "${NEW%%~*}" minidns version
 
 wait_dns
 echo "== state survived =="
-check  "config.yaml untouched"            cmp /tmp/config.yaml.before /etc/minidns/config.yaml
+if [ -f /etc/minidns/config.yaml.pre-v0.2 ]; then
+  check "config migrated, original kept"  cmp /tmp/config.yaml.before /etc/minidns/config.yaml.pre-v0.2
+  expect "migrated config uses cloud_zones" "^cloud_zones:" cat /etc/minidns/config.yaml
+else
+  check "config.yaml untouched"           cmp /tmp/config.yaml.before /etc/minidns/config.yaml
+fi
 check  "unbound-checkconf accepts config" unbound-checkconf
 expect "manual block still listed"   "block blocked.upgrade.example" minidns blocklist
 expect "allow entry still listed"    "allow doubleclick.net"         minidns blocklist
@@ -74,9 +79,11 @@ expect "allowlist still wins"        "rcode +NOERROR"  minidns test doubleclick.
 expect "DoT upstream kept"           "DNS-over-TLS"    minidns upstream
 expect "resolution works"            "rcode +NOERROR"  minidns test example.org
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
-  expect "replica still configured"  "${E2E_ZONE:-dnsif.ca}" minidns zone list
+  ZL="zone list"; ZS="zone sync"
+  minidns cloud zone list >/dev/null 2>&1 && { ZL="cloud zone list"; ZS="cloud zone sync"; }   # v0.2+ spelling
+  expect "replica still configured"  "${E2E_ZONE:-dnsif.ca}" minidns $ZL
   expect "replica still answers"     "rcode +NOERROR" minidns test "${E2E_ZONE_HOST:-gitlab.dnsif.ca}"
-  check  "replica sync works on new version" minidns zone sync
+  check  "replica sync works on new version" minidns $ZS
 fi
 if cmp -s /tmp/minidns.conf.before /etc/unbound/unbound.conf.d/minidns.conf; then
   ok "generated unbound config identical across the upgrade"

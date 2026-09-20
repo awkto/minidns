@@ -14,9 +14,9 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §8 | Global forwarders | partial | `upstream set` (replace-all, DoT) → `forwarder` family #35 |
 | §8 | Zone-specific forwarders | missing | #35 |
 | §8 | Recursion mode | complete | `recursion on|off` kept (D7) |
-| §9.1 | Local authoritative zones | missing | #31 |
-| §9.2 | Records | missing | #32 |
-| §9.3 | Reverse zones, `host` | missing | #33 #34 |
+| §9.1 | Local authoritative zones | complete | `zone add/list/show/remove` (v0.2 branch) |
+| §9.2 | Records | complete | `record add/list/remove`, 9 types, `--managed-by` (#65) |
+| §9.3 | Reverse zones, `host` | complete | `reverse-zone add`, `host add/rename/remove` |
 | §10 | `query` | partial | exists as `test` (no `--server/--trace/--json`) #36 |
 | §11 | Devices | missing | #46 |
 | §12 | Query log: enable/tail/list | partial | `logs` with `--client/--blocked/--since`; text re-parse, IP only → #44 #47 |
@@ -27,12 +27,12 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §14.2 | Subscribed blocklists | partial | works + daily jittered timer; enable/disable/status #39, staged safety #40 |
 | §14.3 | Allowlist precedence | complete | allow zone rendered first |
 | §14.3 | `block explain` | partial | verdict inside `test`; list order bug #16; #41 |
-| §15 | Cloud replicas, read-only | partial | DigitalOcean; rename #54; validation #14; status/diff/LKG #55 |
+| §15 | Cloud replicas, read-only | partial | DigitalOcean under `cloud zone …`; validated before activation; status/diff/LKG #55 |
 | §15.3 | Credential handling | partial | 0600 config or token_file/env; #56 |
 | §15.4 | More providers | missing | Cloudflare #5, Route 53 #57, Azure #58 |
 | §16 | Transactional apply + rollback | partial | conf file validated + restored; zones/RPZ not staged, restart not rolled back #26 |
 | §16 | Backup / restore | missing | #28 |
-| §17 | Noun-verb CLI, `--json`, exit codes, `--dry-run` | missing | #23 #24 |
+| §17 | Noun-verb CLI, `--json`, exit codes, `--dry-run` | partial | cobra root, exit-code table, `--json` on new commands; v0.1 commands not yet renamed, no `--dry-run` #23 #24 |
 | §19 | Input validation, path safety | partial | domains validated; list/zone names not #15; no write lock #17 |
 | §19 | Timeouts, size limits | partial | HTTP timeouts yes; download size cap no #40 |
 | §20.1 | Unit tests | partial | rpz + qlog only; render golden tests #19 |

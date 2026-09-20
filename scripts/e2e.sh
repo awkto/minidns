@@ -14,6 +14,11 @@ check() { # check <desc> <cmd...>
   local desc="$1"; shift
   if "$@" >/tmp/out 2>&1; then ok "$desc"; else bad "$desc"; sed 's/^/    /' /tmp/out; fi
 }
+expect_rc() { # expect_rc <desc> <exit code> <cmd...>
+  local desc="$1" want="$2"; shift 2
+  "$@" >/tmp/out 2>&1; local got=$?
+  if [ "$got" -eq "$want" ]; then ok "$desc"; else bad "$desc (exit $got, want $want)"; sed 's/^/    /' /tmp/out | head -8; fi
+}
 expect() { # expect <desc> <pattern> <cmd...>
   local desc="$1" pat="$2"; shift 2
   "$@" >/tmp/out 2>&1
@@ -82,13 +87,50 @@ expect "list remove works" "removed list e2e" minidns adblock list remove e2e
 wait_dns
 expect "unsafe list name rejected" "invalid list name" minidns adblock list add http://127.0.0.1:8099/e2e-list.txt --name ../../evil
 
+echo "== local zones and records =="
+expect "zone add creates an authoritative zone" 'Zone "home.arpa" added' minidns zone add home.arpa
+expect "reverse-zone add maps the network"      '0.20.10.in-addr.arpa' minidns reverse-zone add 10.20.0.0/24
+expect "unbound still validates its config"     "no errors" unbound-checkconf
+expect "host add creates A and PTR together"    "added +10.0.20.10.in-addr.arpa. PTR nas.home.arpa." minidns host add nas --ip 10.20.0.10 --ip fd00::10 --zone home.arpa
+expect "forward record resolves"                "nas.home.arpa.*A.*10.20.0.10" minidns test nas.home.arpa
+expect "AAAA record resolves"                   "fd00::10" minidns test nas.home.arpa AAAA
+expect "PTR resolves (RFC1918 reverse space)"   "PTR.*nas.home.arpa" minidns test 10.0.20.10.in-addr.arpa PTR
+expect "verdict names the local zone"           "served from local zone home.arpa" minidns test nas.home.arpa
+expect "record add CNAME (relative target)"     "Added git.home.arpa. 300 CNAME nas.home.arpa." minidns record add home.arpa git CNAME nas
+expect "CNAME is chased inside the zone"        "10.20.0.10" minidns test git.home.arpa
+expect "record add MX takes a multi-word value" "MX 10 mail.home.arpa." minidns record add home.arpa @ MX 10 mail.home.arpa.
+expect "record add TXT quotes for you"          'TXT "v=spf1 -all"' minidns record add home.arpa @ TXT "v=spf1 -all" --ttl 600
+expect "TXT resolves with its TTL"              '600.*TXT.*v=spf1 -all' minidns test home.arpa TXT
+expect "adding the same record again is a no-op" "Already present" minidns record add home.arpa git CNAME nas
+expect_rc "invalid value → exit 3"   3 minidns record add home.arpa bad A not-an-ip
+expect_rc "unknown zone → exit 4"    4 minidns record add nope.example x A 10.0.0.1
+expect_rc "CNAME beside A → exit 5"  5 minidns record add home.arpa nas CNAME other
+expect_rc "bad command line → exit 2" 2 minidns record add home.arpa
+expect "record list --json is valid JSON" "^6$" bash -c 'minidns record list home.arpa --json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))"'
+expect "--managed-by tags and filters"  '"managed_by": "minidhcp"' bash -c 'minidns record add home.arpa laptop A 10.20.0.5 --managed-by minidhcp >/dev/null && minidns record list home.arpa --managed-by minidhcp --json'
+expect "host rename moves A and PTR"    "added +10.0.20.10.in-addr.arpa. PTR storage.home.arpa." minidns host rename nas storage
+expect "old name is gone"               "rcode +NXDOMAIN" minidns test nas.home.arpa
+expect "PTR follows the rename"         "PTR.*storage.home.arpa" minidns test 10.0.20.10.in-addr.arpa PTR
+expect "host remove drops A and PTR"    "removed +10.0.20.10.in-addr.arpa. PTR storage.home.arpa." minidns host remove storage
+expect "PTR is gone"                    "rcode +NXDOMAIN" minidns test 10.0.20.10.in-addr.arpa PTR
+expect "record remove"                  "Removed git.home.arpa. CNAME" minidns record remove home.arpa git CNAME
+expect "status lists local zones"       "home.arpa \(local\)" minidns status
+expect_rc "zone remove refuses while records exist → exit 5" 5 minidns zone remove home.arpa
+expect "zone remove --force"            'Zone "home.arpa" removed' minidns zone remove home.arpa --force
+# with our zone gone, unbound's built-in empty home.arpa zone answers again
+expect "removed zone no longer answers" "nobody.invalid" minidns test home.arpa SOA
+expect "names under it are gone"        "rcode +NXDOMAIN" minidns test laptop.home.arpa
+check  "unbound survived all of it"     unbound-control status
+
 echo "== zone mirror (digitalocean) =="
-expect "unsafe zone name rejected" "not a valid zone name" minidns zone add '../../etc/passwd' --provider digitalocean
+expect "unsafe zone name rejected" "not a valid zone name" minidns cloud zone add '../../etc/passwd' --provider digitalocean
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
-  expect "zone add pulls from DO (flag after name)" "mirrored" minidns zone add "$E2E_ZONE" --provider digitalocean
+  expect "cloud zone add pulls from DO" "mirrored" minidns cloud zone add "$E2E_ZONE" --provider digitalocean
+  expect_rc "a replica cannot be edited as a local zone → exit 3" 3 minidns record add "$E2E_ZONE" x A 10.0.0.1
   expect "mirrored zone answers locally" "rcode +NOERROR" minidns test "$E2E_ZONE_HOST"
-  expect "zone sync detects unchanged" "unchanged" minidns zone sync "$E2E_ZONE" --quiet=false
-  expect "zone list shows serial" "serial [0-9]+" minidns zone list
+  expect "cloud zone sync detects unchanged" "unchanged" minidns cloud zone sync "$E2E_ZONE" --quiet=false
+  expect "v0.1 spelling still works, with a warning" "deprecated" minidns zone sync
+  expect "cloud zone list shows serial" "serial [0-9]+" minidns cloud zone list
 else
   echo "SKIP: zone mirror checks (no DIGITALOCEAN_TOKEN)"
 fi

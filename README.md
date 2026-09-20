@@ -50,8 +50,14 @@ minidns allow good.example.com          allowlist (always wins)
 minidns adblock update                  refresh lists now (timer does this daily)
 minidns adblock list add https://big.oisd.nl/rpz --name oisd --format rpz
 
-minidns zone add example.com            mirror a zone from DigitalOcean
-minidns zone sync                       pull fresh copies (timer: every 5 min)
+minidns zone add home.arpa              your own authoritative zone
+minidns reverse-zone add 10.20.0.0/24   ...and the reverse zone for the LAN
+minidns host add nas --ip 10.20.0.10    A/AAAA + matching PTR in one step
+minidns record add home.arpa git CNAME nas
+minidns record list home.arpa --json    every read/mutation speaks JSON
+
+minidns cloud zone add example.com      read-only replica of a DigitalOcean zone
+minidns cloud zone sync                 pull fresh copies (timer: every 5 min)
 
 minidns upstream set 9.9.9.9 --tls      change forwarders (DNS-over-TLS)
 minidns recursion on                    resolve from the roots, skip forwarders

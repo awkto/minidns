@@ -91,6 +91,21 @@ func Render(c *config.Config) string {
 		w("  val-log-level: 1")
 	}
 
+	// Local authoritative zones. unbound ships built-in "static" local-zones
+	// for private names (home.arpa, the RFC 1918 reverse trees, ...) that
+	// would answer NXDOMAIN before the auth-zone is consulted, so each zone is
+	// declared transparent; and a private name has no DNSSEC chain from the
+	// root, so validation is switched off for exactly that subtree.
+	local := localZones(c)
+	if len(local) > 0 {
+		w("")
+		w("  # local authoritative zones")
+		for _, z := range local {
+			w("  local-zone: %q transparent", z+".")
+			w("  domain-insecure: %q", z+".")
+		}
+	}
+
 	// RPZ zones: first match wins across zones in config order, so the
 	// allowlist comes first, then manual blocks, then adblock lists.
 	rpz := func(name, file, tag string) {
@@ -120,9 +135,19 @@ func Render(c *config.Config) string {
 		}
 	}
 
-	// Local zone mirrors: answered from the on-disk copy, never upstream,
+	for _, z := range local {
+		w("")
+		w("auth-zone:")
+		w("  name: %q", z+".")
+		w("  zonefile: %q", paths.LocalZoneFile(z))
+		w("  for-downstream: yes")
+		w("  for-upstream: yes")
+		w("  fallback-enabled: no")
+	}
+
+	// Cloud-zone replicas: answered from the on-disk copy, never upstream,
 	// so they keep resolving through an ISP outage.
-	for _, z := range c.Zones {
+	for _, z := range c.CloudZones {
 		if !fileExists(paths.ZoneFile(z.Name)) {
 			continue
 		}
@@ -155,6 +180,19 @@ func Render(c *config.Config) string {
 	}
 
 	return b.String()
+}
+
+// localZones returns the configured local zones that have a zone file, in
+// a stable order.
+func localZones(c *config.Config) []string {
+	var out []string
+	for _, z := range c.LocalZones {
+		if fileExists(paths.LocalZoneFile(z)) {
+			out = append(out, z)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // slabs returns the power of two closest to (>=) the thread count, as the

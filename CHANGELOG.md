@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (v0.2.0)
+
+### Added
+- **Local authoritative zones**: `zone add|list|show|remove`. Zone files are the single copy of the data, rendered deterministically, serial bumped automatically, served by unbound auth-zones.
+- **Records**: `record add|list|remove` for A, AAAA, CNAME, MX, TXT, NS, SRV, CAA and PTR — values are validated by parsing them, TXT is quoted/split for you, CNAME coexistence is enforced, adding the same record twice is a no-op. `--ttl`, `--managed-by <tool>` (for minidhcp and friends).
+- **Reverse zones and hosts**: `reverse-zone add <cidr>` (IPv4 and IPv6), `host add|rename|remove` manages A/AAAA and the matching PTRs together.
+- Every record change hot-reloads just that zone (cache untouched), verifies unbound serves the new serial, and rolls the file back if it doesn't.
+- `--json` on the new commands and a documented, stable exit-code table (2 usage, 3 invalid, 4 not found, 5 conflict, 6 apply failed, …). Shell completion via `minidns completion`.
+
+### Changed
+- **`zone` now means local zones.** The DigitalOcean replicas moved to `cloud zone add|list|sync|remove` (+ `cloud provider list`). `zone sync` and `zone add --provider` still work with a deprecation warning. `config.yaml`'s `zones:` key is migrated to `cloud_zones:` on upgrade; the original is kept as `config.yaml.pre-v0.2`.
+
 ## v0.1.1 — 2026-09-20
 
 Bug-fix release. No command changes; the generated unbound config is

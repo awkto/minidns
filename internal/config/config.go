@@ -47,7 +47,15 @@ type Config struct {
 		Lists   []BlockList `yaml:"lists"`
 	} `yaml:"adblock"`
 
-	Zones []Zone `yaml:"zones"`
+	// LocalZones are authoritative zones owned by this host; their records
+	// live in zone files under paths.LocalZoneDir().
+	LocalZones []string `yaml:"local_zones"`
+
+	// CloudZones are read-only replicas of zones hosted at a cloud provider.
+	// v0.1 called this key "zones"; Load folds the old key in and the next
+	// Save writes the new one.
+	CloudZones  []Zone `yaml:"cloud_zones"`
+	LegacyZones []Zone `yaml:"zones,omitempty"`
 
 	Providers struct {
 		DigitalOcean struct {
@@ -64,6 +72,10 @@ type Config struct {
 		Enabled bool   `yaml:"enabled"`
 		Listen  string `yaml:"listen"`
 	} `yaml:"exporter"`
+
+	// Migrated is set by Load when the file used keys from an older version;
+	// callers that are allowed to write should Save to persist the new form.
+	Migrated bool `yaml:"-"`
 }
 
 func Default() *Config {
@@ -100,6 +112,15 @@ func Load() (*Config, error) {
 	if err := yaml.Unmarshal(b, c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", paths.ConfigFile(), err)
 	}
+	if len(c.LegacyZones) > 0 {
+		for _, z := range c.LegacyZones {
+			if c.FindZone(z.Name) == nil {
+				c.CloudZones = append(c.CloudZones, z)
+			}
+		}
+		c.LegacyZones = nil
+		c.Migrated = true
+	}
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", paths.ConfigFile(), err)
 	}
@@ -108,7 +129,7 @@ func Load() (*Config, error) {
 
 var (
 	listNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-	zoneNameRe = regexp.MustCompile(`^([a-z0-9_]([a-z0-9_-]*[a-z0-9_])?\.)+[a-z][a-z0-9-]*$`)
+	zoneNameRe = regexp.MustCompile(`^([a-z0-9_]([a-z0-9_-]*[a-z0-9_])?\.)*[a-z][a-z0-9-]*$`)
 )
 
 // Validate rejects names that would be unsafe in the file paths and unbound
@@ -120,9 +141,17 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("adblock list name %q is invalid (lowercase letters, digits, - and _)", l.Name)
 		}
 	}
-	for _, z := range c.Zones {
+	for _, z := range c.CloudZones {
 		if len(z.Name) > 253 || !zoneNameRe.MatchString(z.Name) {
-			return fmt.Errorf("zone name %q is invalid", z.Name)
+			return fmt.Errorf("cloud zone name %q is invalid", z.Name)
+		}
+	}
+	for _, z := range c.LocalZones {
+		if len(z) > 253 || !zoneNameRe.MatchString(z) {
+			return fmt.Errorf("local zone name %q is invalid", z)
+		}
+		if c.FindZone(z) != nil {
+			return fmt.Errorf("%q is configured both as a local zone and as a cloud replica", z)
 		}
 	}
 	return nil
@@ -163,15 +192,26 @@ func (c *Config) DOToken() (string, error) {
 	return "", fmt.Errorf("no DigitalOcean token: set providers.digitalocean.token in %s (or token_file / DIGITALOCEAN_TOKEN)", paths.ConfigFile())
 }
 
-// FindZone returns the configured zone entry for name, if any.
+// FindZone returns the cloud replica entry for name, if any.
 func (c *Config) FindZone(name string) *Zone {
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	for i := range c.Zones {
-		if c.Zones[i].Name == name {
-			return &c.Zones[i]
+	for i := range c.CloudZones {
+		if c.CloudZones[i].Name == name {
+			return &c.CloudZones[i]
 		}
 	}
 	return nil
+}
+
+// HasLocalZone reports whether name is one of the local authoritative zones.
+func (c *Config) HasLocalZone(name string) bool {
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	for _, z := range c.LocalZones {
+		if z == name {
+			return true
+		}
+	}
+	return false
 }
 
 // FindList returns the adblock list with the given name, if any.

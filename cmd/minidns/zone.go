@@ -33,7 +33,7 @@ func cmdZone(args []string) error {
 			return err
 		}
 		if len(pos) != 1 {
-			return fmt.Errorf("usage: minidns zone add <zone> [--provider digitalocean]")
+			return fmt.Errorf("usage: minidns cloud zone add <zone> [--provider digitalocean]")
 		}
 		name := rpz.Normalize(pos[0])
 		if !rpz.ValidDomain(name) || strings.HasPrefix(name, "*.") {
@@ -42,12 +42,15 @@ func cmdZone(args []string) error {
 		if cfg.FindZone(name) != nil {
 			return fmt.Errorf("zone %s is already mirrored", name)
 		}
+		if cfg.HasLocalZone(name) {
+			return fmt.Errorf("%s is a local authoritative zone on this host; a name can be local or a replica, not both", name)
+		}
 		z := config.Zone{Name: name, Provider: *prov}
 		fmt.Printf("pulling %s from %s...\n", name, *prov)
 		if err := syncZone(cfg, z, false); err != nil {
 			return err
 		}
-		cfg.Zones = append(cfg.Zones, z)
+		cfg.CloudZones = append(cfg.CloudZones, z)
 		if err := config.Save(cfg); err != nil {
 			return err
 		}
@@ -59,19 +62,19 @@ func cmdZone(args []string) error {
 
 	case "remove":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: minidns zone remove <zone>")
+			return fmt.Errorf("usage: minidns cloud zone remove <zone>")
 		}
 		name := strings.TrimSuffix(strings.ToLower(args[1]), ".")
 		if cfg.FindZone(name) == nil {
 			return fmt.Errorf("zone %s is not mirrored", name)
 		}
-		out := cfg.Zones[:0]
-		for _, z := range cfg.Zones {
+		out := cfg.CloudZones[:0]
+		for _, z := range cfg.CloudZones {
 			if z.Name != name {
 				out = append(out, z)
 			}
 		}
-		cfg.Zones = out
+		cfg.CloudZones = out
 		if err := config.Save(cfg); err != nil {
 			return err
 		}
@@ -84,11 +87,11 @@ func cmdZone(args []string) error {
 		return nil
 
 	case "list":
-		if len(cfg.Zones) == 0 {
-			fmt.Println("no zones mirrored — add one with `minidns zone add <zone>`")
+		if len(cfg.CloudZones) == 0 {
+			fmt.Println("no zones replicated — add one with `minidns cloud zone add <zone>`")
 			return nil
 		}
-		for _, z := range cfg.Zones {
+		for _, z := range cfg.CloudZones {
 			p := paths.ZoneFile(z.Name)
 			if st, err := os.Stat(p); err == nil {
 				fmt.Printf("%-30s %-14s serial %-12s synced %s\n", z.Name, z.Provider, zoneSerial(p), ago(st.ModTime()))
@@ -106,9 +109,9 @@ func cmdZone(args []string) error {
 			return err
 		}
 		if len(pos) > 1 {
-			return fmt.Errorf("usage: minidns zone sync [<zone>] [--quiet]")
+			return fmt.Errorf("usage: minidns cloud zone sync [<zone>] [--quiet]")
 		}
-		targets := cfg.Zones
+		targets := cfg.CloudZones
 		if len(pos) == 1 {
 			z := cfg.FindZone(pos[0])
 			if z == nil {
@@ -133,7 +136,7 @@ func cmdZone(args []string) error {
 		}
 		return firstErr
 	}
-	return fmt.Errorf("usage: minidns zone add|remove|list|sync")
+	return fmt.Errorf("usage: minidns cloud zone add|remove|list|sync")
 }
 
 // syncZone pulls a fresh copy of the zone and hot-reloads it in unbound if

@@ -74,11 +74,28 @@ func TestRenderFullForwarder(t *testing.T) {
 	cfg.Adblock.Lists = append(cfg.Adblock.Lists,
 		config.BlockList{Name: "oisd", Format: "rpz"},
 		config.BlockList{Name: "missing", Format: "hosts"}) // no file on disk → not rendered
-	cfg.Zones = []config.Zone{{Name: "dnsif.ca", Provider: "digitalocean"}, {Name: "unsynced.example", Provider: "digitalocean"}}
+	cfg.CloudZones = []config.Zone{{Name: "dnsif.ca", Provider: "digitalocean"}, {Name: "unsynced.example", Provider: "digitalocean"}}
 	for _, f := range []string{paths.AllowRPZ(), paths.BlockRPZ(), paths.AdblockRPZ("stevenblack"), paths.AdblockRPZ("oisd"), paths.ZoneFile("dnsif.ca")} {
 		touch(t, f)
 	}
 	golden(t, "full-forwarder", prefix, Render(cfg))
+}
+
+func TestRenderLocalZones(t *testing.T) {
+	cfg, prefix := sandbox(t)
+	cfg.LocalZones = []string{"home.arpa", "0.20.10.in-addr.arpa", "nofile.example"}
+	os.MkdirAll(paths.LocalZoneDir(), 0o755)
+	touch(t, paths.LocalZoneFile("home.arpa"))
+	touch(t, paths.LocalZoneFile("0.20.10.in-addr.arpa"))
+	out := Render(cfg)
+	golden(t, "local-zones", prefix, out)
+	if strings.Contains(out, "nofile.example") {
+		t.Error("a zone without a file must not be rendered (unbound exits on a missing zonefile)")
+	}
+	// the server-clause options must come before the first non-server clause
+	if strings.Index(out, "domain-insecure") > strings.Index(out, "\nauth-zone:") {
+		t.Error("local-zone/domain-insecure must be inside the server: clause")
+	}
 }
 
 func TestRenderRecursionNoBlocking(t *testing.T) {

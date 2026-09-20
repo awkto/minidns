@@ -52,6 +52,11 @@ func cmdTest(args []string) error {
 			}
 		}
 	}
+	for _, lz := range cfg.LocalZones {
+		if name == lz || strings.HasSuffix(name, "."+lz) {
+			verdict = "served from local zone " + lz
+		}
+	}
 	if z := matchZone(cfg, name); z != nil {
 		suffix := ""
 		if verdict != "" {
@@ -89,8 +94,8 @@ func cmdTest(args []string) error {
 
 // matchZone returns the mirrored zone that name falls under, if any.
 func matchZone(cfg *config.Config, name string) *config.Zone {
-	for i := range cfg.Zones {
-		z := &cfg.Zones[i]
+	for i := range cfg.CloudZones {
+		z := &cfg.CloudZones[i]
 		if name == z.Name || strings.HasSuffix(name, "."+z.Name) {
 			return z
 		}
