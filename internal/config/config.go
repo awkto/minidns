@@ -23,6 +23,9 @@ type BlockList struct {
 type Zone struct {
 	Name     string `yaml:"name"`
 	Provider string `yaml:"provider"` // digitalocean (roadmap: route53, azure, cloudflare)
+	// Overlay allows local-only records layered over the replica (`minidns
+	// record add <zone> …`); the provider's data itself stays read-only.
+	Overlay bool `yaml:"overlay,omitempty"`
 }
 
 type Config struct {

@@ -43,7 +43,8 @@ func cloudCmd() *cobra.Command {
 		sub("add <zone> [--provider digitalocean]", "Replicate a zone from a cloud provider", false),
 		sub("list", "List replicas with serial and last sync", true),
 		sub("sync [<zone>] [--quiet]", "Pull fresh copies now (a timer does this every 5 minutes)", false),
-		sub("remove <zone>", "Stop replicating a zone", false),
+		sub("remove <zone> [--force]", "Stop replicating a zone", false),
+		overlayCmd(),
 	)
 
 	provider := &cobra.Command{Use: "provider", Short: "Cloud DNS providers"}

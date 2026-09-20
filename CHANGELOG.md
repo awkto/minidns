@@ -6,6 +6,7 @@
 - **Local authoritative zones**: `zone add|list|show|remove`. Zone files are the single copy of the data, rendered deterministically, serial bumped automatically, served by unbound auth-zones.
 - **Records**: `record add|list|remove` for A, AAAA, CNAME, MX, TXT, NS, SRV, CAA and PTR — values are validated by parsing them, TXT is quoted/split for you, CNAME coexistence is enforced, adding the same record twice is a no-op. `--ttl`, `--managed-by <tool>` (for minidhcp and friends).
 - **Reverse zones and hosts**: `reverse-zone add <cidr>` (IPv4 and IPv6), `host add|rename|remove` manages A/AAAA and the matching PTRs together.
+- **Overlay records on a cloud replica**: `cloud zone overlay enable <zone>` lets `record` and `host` add local-only records on top of a read-only replica (e.g. LAN device names under your public domain). The provider's zone is never written to; its pristine copy, the overlay and the merged served file are kept apart and re-merged on every sync. An overlay record hides a provider record of the same name and type (and says so). `record list <replica>` shows every record with its source.
 - Every record change hot-reloads just that zone (cache untouched), verifies unbound serves the new serial, and rolls the file back if it doesn't.
 - `--json` on the new commands and a documented, stable exit-code table (2 usage, 3 invalid, 4 not found, 5 conflict, 6 apply failed, …). Shell completion via `minidns completion`.
 

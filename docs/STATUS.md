@@ -27,7 +27,7 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §14.2 | Subscribed blocklists | partial | works + daily jittered timer; enable/disable/status #39, staged safety #40 |
 | §14.3 | Allowlist precedence | complete | allow zone rendered first |
 | §14.3 | `block explain` | partial | verdict inside `test`; list order bug #16; #41 |
-| §15 | Cloud replicas, read-only | partial | DigitalOcean under `cloud zone …`; validated before activation; status/diff/LKG #55 |
+| §15 | Cloud replicas, read-only | partial | DigitalOcean under `cloud zone …`; validated before activation; opt-in local overlay records (#68); status/diff/LKG #55 |
 | §15.3 | Credential handling | partial | 0600 config or token_file/env; #56 |
 | §15.4 | More providers | missing | Cloudflare #5, Route 53 #57, Azure #58 |
 | §16 | Transactional apply + rollback | partial | conf file validated + restored; zones/RPZ not staged, restart not rolled back #26 |

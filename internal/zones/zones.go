@@ -34,6 +34,8 @@ var (
 const (
 	DefaultTTL = 300
 	header     = "; Managed by minidns — change records with `minidns record`, not by hand.\n"
+	ovHeader   = "; Local overlay records for a cloud replica — they exist only on this resolver.\n" + header
+	overlayTag = "overlay"
 	managedTag = "managed-by="
 )
 
@@ -44,13 +46,27 @@ type Record struct {
 	Type      string `json:"type"`  //
 	Value     string `json:"value"` // rdata in presentation format
 	ManagedBy string `json:"managed_by,omitempty"`
+	// Source is set in the merged view of a replica: "overlay" for local
+	// overlay records, otherwise the provider the record came from.
+	Source string `json:"source,omitempty"`
 }
 
-// Zone is a parsed local zone.
+// Zone is a parsed local zone — or, with Overlay set, the local overlay
+// records of a cloud replica (no SOA of its own; see Merge).
 type Zone struct {
 	Name    string   `json:"name"` // no trailing dot
 	Serial  uint32   `json:"serial"`
 	Records []Record `json:"records"`
+	Overlay bool     `json:"overlay,omitempty"`
+
+	banner string // first line(s) of the rendered file; default: header
+}
+
+func (z *Zone) file() string {
+	if z.Overlay {
+		return paths.OverlayFile(z.Name)
+	}
+	return paths.LocalZoneFile(z.Name)
 }
 
 // Origin returns the zone name as an FQDN.
@@ -130,6 +146,32 @@ func Load(name string) (*Zone, error) {
 	}
 	return parse(name, string(b))
 }
+
+// LoadOverlay reads the overlay records of a replica; a replica that has
+// none yet yields an empty overlay.
+func LoadOverlay(name string) (*Zone, error) {
+	name = NormalizeZone(name)
+	b, err := os.ReadFile(paths.OverlayFile(name))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	z, err := parse(name, string(b))
+	if err != nil {
+		return nil, err
+	}
+	z.Overlay = true
+	return z, nil
+}
+
+// RemoveOverlay deletes the overlay records of a replica.
+func RemoveOverlay(name string) {
+	target := paths.OverlayFile(NormalizeZone(name))
+	os.Remove(target)
+	os.Remove(target + ".prev")
+}
+
+// Parse reads zone data that is not a local zone (a replica's served copy).
+func Parse(name, data string) (*Zone, error) { return parse(NormalizeZone(name), data) }
 
 func parse(name, data string) (*Zone, error) {
 	z := &Zone{Name: name}
@@ -293,6 +335,9 @@ func (z *Zone) Add(name, rrtype, value string, ttl uint32, managedBy string) (re
 	if rec.Type == "CNAME" && rec.Name == z.Origin() {
 		return rec, false, fmt.Errorf("%w: the zone apex cannot be a CNAME", ErrConflict)
 	}
+	if z.Overlay && rec.Type == "NS" && rec.Name == z.Origin() {
+		return rec, false, fmt.Errorf("%w: the name servers of a replica come from the provider and cannot be overlaid", ErrInvalid)
+	}
 	z.Records = append(z.Records, rec)
 	return rec, true, nil
 }
@@ -328,7 +373,7 @@ func (z *Zone) Remove(name, rrtype, value string) ([]Record, error) {
 	if len(removed) == 0 {
 		return nil, fmt.Errorf("%w: no %s record at %s", ErrNotFound, rrtype, owner)
 	}
-	if rrtype == "NS" && owner == z.Origin() && countApexNS(kept, owner) == 0 {
+	if !z.Overlay && rrtype == "NS" && owner == z.Origin() && countApexNS(kept, owner) == 0 {
 		return nil, fmt.Errorf("%w: a zone needs at least one NS record at its apex", ErrConflict)
 	}
 	z.Records = kept
@@ -408,7 +453,14 @@ func reverseLabels(name string) string {
 // Render produces the canonical zone file with the given serial.
 func (z *Zone) Render(serial uint32) string {
 	var b strings.Builder
-	b.WriteString(header)
+	switch {
+	case z.banner != "":
+		b.WriteString(z.banner)
+	case z.Overlay:
+		b.WriteString(ovHeader)
+	default:
+		b.WriteString(header)
+	}
 	fmt.Fprintf(&b, "$ORIGIN %s\n$TTL %d\n", z.Origin(), DefaultTTL)
 	for _, r := range z.sorted() {
 		value := r.Value
@@ -420,7 +472,12 @@ func (z *Zone) Render(serial uint32) string {
 			}
 		}
 		fmt.Fprintf(&b, "%s\t%d\tIN\t%s\t%s", r.Name, r.TTL, r.Type, value)
-		if r.ManagedBy != "" {
+		switch {
+		case r.Source == overlayTag && r.ManagedBy != "":
+			fmt.Fprintf(&b, " ; %s %s%s", overlayTag, managedTag, r.ManagedBy)
+		case r.Source == overlayTag:
+			fmt.Fprintf(&b, " ; %s", overlayTag)
+		case r.ManagedBy != "":
 			fmt.Fprintf(&b, " ; %s%s", managedTag, r.ManagedBy)
 		}
 		b.WriteByte('\n')
@@ -432,13 +489,23 @@ func (z *Zone) Render(serial uint32) string {
 // the file. Add and Remove only change the zone in memory, so a command that
 // touches several records is written — and can be rolled back — as one
 // change. The previous file is kept as <file>.prev for Rollback.
+//
+// An overlay has no SOA and no serial of its own: it is only ever served
+// merged into its replica (see Merge), so it is checked by parsing it back.
 func (z *Zone) Save() error {
 	serial := nextSerial(z.Serial, time.Now())
+	if z.Overlay {
+		serial = 0
+	}
 	data := z.Render(serial)
-	if _, err := zonefile.Validate(z.Name, data); err != nil {
+	if z.Overlay {
+		if back, err := parse(z.Name, data); err != nil || len(back.Records) != len(z.Records) {
+			return fmt.Errorf("refusing to write the overlay of %s: it does not read back intact (%v)", z.Name, err)
+		}
+	} else if _, err := zonefile.Validate(z.Name, data); err != nil {
 		return fmt.Errorf("refusing to write zone %s: %w", z.Name, err)
 	}
-	target := paths.LocalZoneFile(z.Name)
+	target := z.file()
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -462,13 +529,72 @@ func (z *Zone) Save() error {
 
 // Rollback restores the file that was active before the last save (or
 // removes the zone file if that save created it).
-func Rollback(name string) error {
-	target := paths.LocalZoneFile(NormalizeZone(name))
+func Rollback(name string) error { return rollback(paths.LocalZoneFile(NormalizeZone(name))) }
+
+// RollbackOverlay is Rollback for the overlay records of a replica.
+func RollbackOverlay(name string) error { return rollback(paths.OverlayFile(NormalizeZone(name))) }
+
+func rollback(target string) error {
 	if _, err := os.Stat(target + ".prev"); err != nil {
 		return os.Remove(target)
 	}
 	return os.Rename(target+".prev", target)
 }
+
+// Undo restores whatever z's last Save replaced.
+func (z *Zone) Undo() error { return rollback(z.file()) }
+
+// Merge layers overlay records over a provider's copy of the zone and
+// returns the zone to serve plus the provider records the overlay hides.
+// The overlay wins per name and type; and because a CNAME cannot share its
+// name, an overlay CNAME hides everything the provider has at that name, and
+// any overlay record hides a provider CNAME there. The SOA and the apex NS
+// set always come from the provider. The result carries the provider's
+// serial; the caller picks the serial to serve (Render).
+func Merge(name, upstream string, overlay []Record, provider string) (merged *Zone, shadowed []Record, err error) {
+	name = NormalizeZone(name)
+	up, err := parse(name, upstream)
+	if err != nil {
+		return nil, nil, err
+	}
+	origin := dns.Fqdn(name)
+	byNameType := map[string]bool{}
+	cnameAt := map[string]bool{}
+	anyAt := map[string]bool{}
+	for _, r := range overlay {
+		byNameType[r.Name+"/"+r.Type] = true
+		anyAt[r.Name] = true
+		if r.Type == "CNAME" {
+			cnameAt[r.Name] = true
+		}
+	}
+	merged = &Zone{Name: name, Serial: up.Serial, banner: fmt.Sprintf(
+		"; Replica of %s from %s with %d local overlay record(s), generated by minidns.\n"+
+			"; Do not edit: provider data is refreshed by `minidns cloud zone sync`, overlay records by `minidns record`.\n",
+		name, provider, len(overlay))}
+	for _, r := range up.Records {
+		protected := r.Name == origin && (r.Type == "SOA" || r.Type == "NS")
+		hidden := byNameType[r.Name+"/"+r.Type] || cnameAt[r.Name] || (r.Type == "CNAME" && anyAt[r.Name])
+		if hidden && !protected {
+			r.Source = provider
+			shadowed = append(shadowed, r)
+			continue
+		}
+		r.Source = provider
+		merged.Records = append(merged.Records, r)
+	}
+	for _, r := range overlay {
+		if r.Name == origin && (r.Type == "SOA" || r.Type == "NS" || r.Type == "CNAME") {
+			return nil, nil, fmt.Errorf("%w: %s at the apex of a replica cannot be overlaid", ErrInvalid, r.Type)
+		}
+		r.Source = overlayTag
+		merged.Records = append(merged.Records, r)
+	}
+	return merged, shadowed, nil
+}
+
+// SourceOverlay is the Record.Source of overlay records in a merged view.
+const SourceOverlay = overlayTag
 
 // ReverseZoneFor returns the reverse zone name enclosing prefix, rounded
 // down to the octet (IPv4) or nibble (IPv6) boundary DNS delegation uses,

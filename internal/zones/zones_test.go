@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/awkto/minidns/internal/paths"
+	"github.com/awkto/minidns/internal/zonefile"
 )
 
 func newZone(t *testing.T, name string) *Zone {
@@ -282,5 +283,138 @@ func TestBestReverseZoneAndPTR(t *testing.T) {
 	}
 	if got := BestReverseZone(local, netip.MustParseAddr("fd00::10")); got != "0.0.d.f.ip6.arpa" {
 		t.Errorf("v6: %q", got)
+	}
+}
+
+const upstreamZone = `$ORIGIN example.com.
+$TTL 1800
+example.com. IN SOA ns1.provider.net. hostmaster.example.com. 1700000000 10800 3600 604800 1800
+example.com. 1800 IN NS ns1.provider.net.
+example.com. 1800 IN NS ns2.provider.net.
+example.com. 300 IN A 203.0.113.10
+www.example.com. 300 IN A 203.0.113.10
+www.example.com. 300 IN AAAA 2001:db8::10
+app.example.com. 300 IN CNAME edge.cdn.net.
+mail.example.com. 300 IN A 203.0.113.25
+`
+
+func overlayOf(t *testing.T, adds ...[3]string) *Zone {
+	t.Helper()
+	ov := &Zone{Name: "example.com", Overlay: true}
+	for _, a := range adds {
+		if _, _, err := ov.Add(a[0], a[1], a[2], 0, "minidhcp"); err != nil {
+			t.Fatalf("overlay add %v: %v", a, err)
+		}
+	}
+	return ov
+}
+
+func TestMergeOverlayWins(t *testing.T) {
+	ov := overlayOf(t,
+		[3]string{"laptop", "A", "10.0.0.5"}, // new name
+		[3]string{"www", "A", "10.0.0.80"},   // hides the provider's A, keeps its AAAA
+		[3]string{"app", "A", "10.0.0.81"},   // hides the provider's CNAME
+		[3]string{"mail", "CNAME", "laptop"}, // hides everything the provider has at mail
+	)
+	merged, shadowed, err := Merge("example.com", upstreamZone, ov.Records, "digitalocean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Serial != 1700000000 {
+		t.Errorf("serial = %d, want the provider's", merged.Serial)
+	}
+	got := map[string]string{}
+	for _, r := range merged.Records {
+		got[r.Name+" "+r.Type+" "+r.Value] = r.Source
+	}
+	for key, source := range map[string]string{
+		"laptop.example.com. A 10.0.0.5":              SourceOverlay,
+		"www.example.com. A 10.0.0.80":                SourceOverlay,
+		"www.example.com. AAAA 2001:db8::10":          "digitalocean",
+		"app.example.com. A 10.0.0.81":                SourceOverlay,
+		"mail.example.com. CNAME laptop.example.com.": SourceOverlay,
+		"example.com. A 203.0.113.10":                 "digitalocean",
+		"example.com. NS ns1.provider.net.":           "digitalocean",
+	} {
+		if got[key] != source {
+			t.Errorf("%q: source %q, want %q", key, got[key], source)
+		}
+	}
+	for _, gone := range []string{"www.example.com. A 203.0.113.10", "app.example.com. CNAME edge.cdn.net.", "mail.example.com. A 203.0.113.25"} {
+		if _, ok := got[gone]; ok {
+			t.Errorf("%q should be hidden by the overlay", gone)
+		}
+	}
+	if len(shadowed) != 3 {
+		t.Errorf("shadowed = %v, want 3 records", shadowed)
+	}
+	// what is served must be a valid zone, deterministic, and carry the tags
+	data := merged.Render(1700000001)
+	if _, err := zonefile.Validate("example.com", data); err != nil {
+		t.Fatalf("merged zone is not valid: %v\n%s", err, data)
+	}
+	if data != merged.Render(1700000001) {
+		t.Error("render is not deterministic")
+	}
+	if !strings.Contains(data, "laptop.example.com.\t300\tIN\tA\t10.0.0.5 ; overlay managed-by=minidhcp") {
+		t.Errorf("overlay record is not labelled:\n%s", data)
+	}
+	if !strings.Contains(data, "1700000001") {
+		t.Error("serial not applied")
+	}
+}
+
+func TestMergeEmptyOverlayKeepsProviderData(t *testing.T) {
+	merged, shadowed, err := Merge("example.com", upstreamZone, nil, "digitalocean")
+	if err != nil || len(shadowed) != 0 || len(merged.Records) != 8 {
+		t.Fatalf("merged %d records, shadowed %v, err %v", len(merged.Records), shadowed, err)
+	}
+}
+
+func TestOverlayProtectsApex(t *testing.T) {
+	ov := &Zone{Name: "example.com", Overlay: true}
+	if _, _, err := ov.Add("@", "NS", "ns.evil.test.", 0, ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("apex NS overlay: %v", err)
+	}
+	if _, _, err := ov.Add("@", "CNAME", "x.test.", 0, ""); !errors.Is(err, ErrConflict) {
+		t.Errorf("apex CNAME overlay: %v", err)
+	}
+	// a hand-edited overlay file must not get past Merge either
+	bad := []Record{{Name: "example.com.", TTL: 300, Type: "NS", Value: "ns.evil.test."}}
+	if _, _, err := Merge("example.com", upstreamZone, bad, "digitalocean"); err == nil {
+		t.Error("Merge accepted an apex NS overlay")
+	}
+	// apex address records are fine (split-horizon apex)
+	if _, _, err := ov.Add("@", "A", "10.0.0.1", 0, ""); err != nil {
+		t.Errorf("apex A overlay: %v", err)
+	}
+}
+
+func TestOverlaySaveLoadUndo(t *testing.T) {
+	t.Setenv("MINIDNS_PREFIX", t.TempDir())
+	ov, err := LoadOverlay("example.com")
+	if err != nil || !ov.Overlay || len(ov.Records) != 0 {
+		t.Fatalf("empty overlay: %+v %v", ov, err)
+	}
+	ov.Add("laptop", "A", "10.0.0.5", 0, "minidhcp")
+	if err := ov.Save(); err != nil {
+		t.Fatal(err)
+	}
+	ov.Add("phone", "A", "10.0.0.6", 0, "")
+	if err := ov.Save(); err != nil {
+		t.Fatal(err)
+	}
+	back, _ := LoadOverlay("example.com")
+	if len(back.Records) != 2 || back.Records[0].ManagedBy+back.Records[1].ManagedBy != "minidhcp" {
+		t.Fatalf("read back %+v", back.Records)
+	}
+	if err := ov.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	if back, _ = LoadOverlay("example.com"); len(back.Records) != 1 {
+		t.Fatalf("after undo: %+v", back.Records)
+	}
+	if Exists("example.com") {
+		t.Error("an overlay must not look like a local zone")
 	}
 }

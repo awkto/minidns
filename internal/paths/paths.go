@@ -33,6 +33,16 @@ func AdblockRPZ(list string) string {
 // ZoneFile is the served copy of a cloud-zone replica.
 func ZoneFile(zone string) string { return filepath.Join(ZoneDir(), zone+".zone") }
 
+// A replica with local overlay records keeps the provider's pristine data in
+// UpstreamFile and the overlay records in OverlayFile; ZoneFile is then the
+// merge of the two. Replicas without an overlay have neither.
+func UpstreamFile(zone string) string {
+	return filepath.Join(ZoneDir(), "upstream", zone+".zone")
+}
+func OverlayFile(zone string) string {
+	return filepath.Join(ZoneDir(), "overlay", zone+".zone")
+}
+
 // Local authoritative zones (owned by minidns, edited with `minidns record`)
 // live apart from the replicas so the two can never overwrite each other.
 func LocalZoneDir() string { return filepath.Join(ZoneDir(), "local") }

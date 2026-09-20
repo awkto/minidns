@@ -14,6 +14,7 @@ import (
 	"github.com/awkto/minidns/internal/rpz"
 	"github.com/awkto/minidns/internal/unbound"
 	"github.com/awkto/minidns/internal/zonefile"
+	"github.com/awkto/minidns/internal/zones"
 )
 
 func cmdZone(args []string) error {
@@ -61,12 +62,24 @@ func cmdZone(args []string) error {
 		return nil
 
 	case "remove":
-		if len(args) != 2 {
-			return fmt.Errorf("usage: minidns cloud zone remove <zone>")
+		fs := flag.NewFlagSet("zone remove", flag.ContinueOnError)
+		force := fs.Bool("force", false, "also delete the zone's local overlay records")
+		pos, err := parseArgs(fs, args[1:])
+		if err != nil {
+			return err
 		}
-		name := strings.TrimSuffix(strings.ToLower(args[1]), ".")
-		if cfg.FindZone(name) == nil {
+		if len(pos) != 1 {
+			return fmt.Errorf("usage: minidns cloud zone remove <zone> [--force]")
+		}
+		name := strings.TrimSuffix(strings.ToLower(pos[0]), ".")
+		rz := cfg.FindZone(name)
+		if rz == nil {
 			return fmt.Errorf("zone %s is not mirrored", name)
+		}
+		if rz.Overlay {
+			if ov, err := zones.LoadOverlay(name); err == nil && len(ov.Records) > 0 && !*force {
+				return fmt.Errorf("%w: %s still has %d local overlay record(s); re-run with --force to delete them with the replica", zones.ErrConflict, name, len(ov.Records))
+			}
 		}
 		out := cfg.CloudZones[:0]
 		for _, z := range cfg.CloudZones {
@@ -83,6 +96,8 @@ func cmdZone(args []string) error {
 			return err
 		}
 		os.Remove(paths.ZoneFile(name))
+		os.Remove(paths.UpstreamFile(name))
+		zones.RemoveOverlay(name)
 		fmt.Println("removed zone", name)
 		return nil
 
@@ -94,7 +109,17 @@ func cmdZone(args []string) error {
 		for _, z := range cfg.CloudZones {
 			p := paths.ZoneFile(z.Name)
 			if st, err := os.Stat(p); err == nil {
-				fmt.Printf("%-30s %-14s serial %-12s synced %s\n", z.Name, z.Provider, zoneSerial(p), ago(st.ModTime()))
+				synced := st.ModTime()
+				overlay := ""
+				if z.Overlay {
+					if us, err := os.Stat(paths.UpstreamFile(z.Name)); err == nil {
+						synced = us.ModTime()
+					}
+					if ov, err := zones.LoadOverlay(z.Name); err == nil {
+						overlay = fmt.Sprintf("  +%d overlay record(s)", len(ov.Records))
+					}
+				}
+				fmt.Printf("%-30s %-14s serial %-12s synced %s%s\n", z.Name, z.Provider, zoneSerial(p), ago(synced), overlay)
 			} else {
 				fmt.Printf("%-30s %-14s NOT SYNCED\n", z.Name, z.Provider)
 			}
@@ -155,6 +180,9 @@ func syncZone(cfg *config.Config, z config.Zone, quiet bool) error {
 	if _, err := zonefile.Validate(z.Name, data); err != nil {
 		return fmt.Errorf("%s returned an unusable zone (keeping the current copy): %w", p.Name(), err)
 	}
+	if z.Overlay {
+		return syncOverlaid(z, data, quiet)
+	}
 	target := paths.ZoneFile(z.Name)
 	old, _ := os.ReadFile(target)
 	if string(old) == data {
@@ -182,6 +210,35 @@ func syncZone(cfg *config.Config, z config.Zone, quiet bool) error {
 		}
 	}
 	fmt.Printf("%s: updated (serial %s)\n", z.Name, zoneSerial(target))
+	return nil
+}
+
+// syncOverlaid stores the provider's fresh data and re-merges the overlay.
+func syncOverlaid(z config.Zone, data string, quiet bool) error {
+	upstream := paths.UpstreamFile(z.Name)
+	if old, _ := os.ReadFile(upstream); string(old) != data {
+		if err := writeFileAtomic(upstream, []byte(data)); err != nil {
+			return err
+		}
+	} else {
+		os.Chtimes(upstream, time.Now(), time.Now())
+	}
+	serial, changed, err := rebuildReplica(z)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		if !quiet {
+			fmt.Printf("%s: unchanged (serial %d)\n", z.Name, serial)
+		}
+		return nil
+	}
+	if unbound.Active() {
+		if err := unbound.ReloadZone(z.Name + "."); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("%s: updated (serial %d)\n", z.Name, serial)
 	return nil
 }
 

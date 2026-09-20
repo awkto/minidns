@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -19,9 +20,17 @@ func (d *DigitalOcean) Name() string { return "digitalocean" }
 
 var doClient = &http.Client{Timeout: 30 * time.Second}
 
+// doAPI is the API base URL; MINIDNS_DO_API points the tests at a fake.
+func doAPI() string {
+	if u := os.Getenv("MINIDNS_DO_API"); u != "" {
+		return strings.TrimSuffix(u, "/")
+	}
+	return "https://api.digitalocean.com"
+}
+
 func (d *DigitalOcean) FetchZone(zone string) (string, error) {
 	zone = strings.TrimSuffix(strings.ToLower(zone), ".")
-	req, err := http.NewRequest("GET", "https://api.digitalocean.com/v2/domains/"+zone, nil)
+	req, err := http.NewRequest("GET", doAPI()+"/v2/domains/"+zone, nil)
 	if err != nil {
 		return "", err
 	}

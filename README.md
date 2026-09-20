@@ -57,6 +57,7 @@ minidns record add home.arpa git CNAME nas
 minidns record list home.arpa --json    every read/mutation speaks JSON
 
 minidns cloud zone add example.com      read-only replica of a DigitalOcean zone
+minidns cloud zone overlay enable example.com   allow local-only records on top of the replica
 minidns cloud zone sync                 pull fresh copies (timer: every 5 min)
 
 minidns upstream set 9.9.9.9 --tls      change forwarders (DNS-over-TLS)

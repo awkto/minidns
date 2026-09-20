@@ -24,6 +24,9 @@ import (
 // cache survives) and the SOA serial unbound answers with must be the one we
 // wrote. If not, the previous file is restored and reloaded.
 func activateZone(cfg *config.Config, z *zones.Zone) error {
+	if z.Overlay {
+		return activateOverlay(cfg, z)
+	}
 	if !unbound.Active() {
 		note("note: unbound is not running — %s was written and will be served once it starts", z.Name)
 		return nil
@@ -32,9 +35,7 @@ func activateZone(cfg *config.Config, z *zones.Zone) error {
 	if err == nil {
 		return nil
 	}
-	if rbErr := zones.Rollback(z.Name); rbErr == nil {
-		unbound.Control("auth_zone_reload", z.Origin())
-	}
+	undoZone(cfg, z)
 	return applyError{fmt.Errorf("unbound did not accept the change to %s (previous zone restored): %w", z.Name, err)}
 }
 
@@ -294,28 +295,74 @@ func loadLocal(name string) (*zones.Zone, error) {
 	name = zones.NormalizeZone(name)
 	if !cfg.HasLocalZone(name) {
 		if cfg.FindZone(name) != nil {
-			return nil, fmt.Errorf("%w: %s is a read-only cloud replica, not a local zone — change it at the provider", zones.ErrInvalid, name)
+			return nil, fmt.Errorf("%w: %s is a cloud replica, not a local zone (see `minidns cloud zone list`)", zones.ErrInvalid, name)
 		}
 		return nil, fmt.Errorf("%w: no local zone %s (see `minidns zone list`)", zones.ErrNotFound, name)
 	}
 	return zones.Load(name)
 }
 
+func readOnlyReplica(name string) error {
+	return fmt.Errorf("%w: %s is a read-only cloud replica — change it at the provider, or allow local-only records on top of it with `minidns cloud zone overlay enable %s`", zones.ErrInvalid, name, name)
+}
+
+// loadEditable returns what `record` may change: a local zone, or the
+// overlay of a replica that has one enabled.
+func loadEditable(name string) (*zones.Zone, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	name = zones.NormalizeZone(name)
+	if rz := cfg.FindZone(name); rz != nil {
+		if !rz.Overlay {
+			return nil, readOnlyReplica(name)
+		}
+		return zones.LoadOverlay(name)
+	}
+	return loadLocal(name)
+}
+
+// loadView returns a zone for reading: a local zone, or what a replica
+// serves with every record marked by where it comes from.
+func loadView(name string) (*zones.Zone, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	if rz := cfg.FindZone(name); rz != nil {
+		return replicaView(*rz)
+	}
+	return loadLocal(name)
+}
+
 func printRecords(z *zones.Zone, recs []zones.Record) {
-	fmt.Printf("%-36s %-6s %-6s %s\n", "NAME", "TTL", "TYPE", "VALUE")
+	sourced := false
+	for _, r := range recs {
+		sourced = sourced || r.Source != ""
+	}
+	if sourced {
+		fmt.Printf("%-36s %-6s %-6s %-13s %s\n", "NAME", "TTL", "TYPE", "SOURCE", "VALUE")
+	} else {
+		fmt.Printf("%-36s %-6s %-6s %s\n", "NAME", "TTL", "TYPE", "VALUE")
+	}
 	for _, r := range recs {
 		value := r.Value
 		if r.ManagedBy != "" {
 			value += "   (managed by " + r.ManagedBy + ")"
 		}
-		fmt.Printf("%-36s %-6d %-6s %s\n", r.Name, r.TTL, r.Type, value)
+		if sourced {
+			fmt.Printf("%-36s %-6d %-6s %-13s %s\n", r.Name, r.TTL, r.Type, r.Source, value)
+		} else {
+			fmt.Printf("%-36s %-6d %-6s %s\n", r.Name, r.TTL, r.Type, value)
+		}
 	}
 }
 
 // ---- record --------------------------------------------------------------
 
 func recordCmd() *cobra.Command {
-	record := &cobra.Command{Use: "record", Short: "Records in local authoritative zones"}
+	record := &cobra.Command{Use: "record", Short: "Records in local zones, and local overlay records on cloud replicas"}
 
 	var ttl uint32
 	var managedBy string
@@ -327,7 +374,7 @@ func recordCmd() *cobra.Command {
   minidns record add home.arpa @ MX 10 mail.home.arpa.
   minidns record add home.arpa @ TXT "v=spf1 -all"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			z, err := loadLocal(args[0])
+			z, err := loadEditable(args[0])
 			if err != nil {
 				return err
 			}
@@ -340,12 +387,30 @@ func recordCmd() *cobra.Command {
 					return err
 				}
 			}
-			return emit(map[string]any{"zone": z.Name, "serial": z.Serial, "changed": added, "record": rec}, func() {
+			out := map[string]any{"zone": z.Name, "serial": z.Serial, "changed": added, "record": rec}
+			var hidden []zones.Record
+			if z.Overlay {
+				out["overlay"] = true
+				if cfg, err := config.Load(); err == nil {
+					if rz := cfg.FindZone(z.Name); rz != nil {
+						hidden = overlayShadows(*rz, rec.Name)
+					}
+				}
+				out["shadows"] = hidden
+			}
+			return emit(out, func() {
 				if !added {
 					fmt.Printf("Already present: %s %s %s (zone %s unchanged)\n", rec.Name, rec.Type, rec.Value, z.Name)
 					return
 				}
-				fmt.Printf("Added %s %d %s %s (zone %s, serial %d)\n", rec.Name, rec.TTL, rec.Type, rec.Value, z.Name, z.Serial)
+				if !z.Overlay {
+					fmt.Printf("Added %s %d %s %s (zone %s, serial %d)\n", rec.Name, rec.TTL, rec.Type, rec.Value, z.Name, z.Serial)
+					return
+				}
+				fmt.Printf("Added %s %d %s %s as a local overlay on replica %s (serial %d) — it exists only on this resolver\n", rec.Name, rec.TTL, rec.Type, rec.Value, z.Name, z.Serial)
+				for _, h := range hidden {
+					fmt.Printf("  hides the provider's record: %s %s %s\n", h.Name, h.Type, h.Value)
+				}
 			})
 		},
 	}
@@ -353,10 +418,11 @@ func recordCmd() *cobra.Command {
 	add.Flags().StringVar(&managedBy, "managed-by", "", "tag the record as owned by another tool (e.g. minidhcp)")
 
 	var filterManaged, filterType string
+	var overlayOnly bool
 	list := &cobra.Command{
 		Use: "list <zone>", Short: "List the records of a zone", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			z, err := loadLocal(args[0])
+			z, err := loadView(args[0])
 			if err != nil {
 				return err
 			}
@@ -366,6 +432,9 @@ func recordCmd() *cobra.Command {
 					continue
 				}
 				if filterType != "" && !strings.EqualFold(r.Type, filterType) {
+					continue
+				}
+				if overlayOnly && r.Source != zones.SourceOverlay {
 					continue
 				}
 				recs = append(recs, r)
@@ -379,6 +448,7 @@ func recordCmd() *cobra.Command {
 			})
 		},
 	}
+	list.Flags().BoolVar(&overlayOnly, "overlay", false, "on a replica: only the local overlay records")
 	list.Flags().StringVar(&filterManaged, "managed-by", "", "only records tagged with this owner")
 	list.Flags().StringVar(&filterType, "type", "", "only records of this type")
 
@@ -386,7 +456,7 @@ func recordCmd() *cobra.Command {
 		Use: "remove <zone> <name> <type> [value...]", Short: "Remove records (all of that name and type, or just the given value)",
 		Args: cobra.MinimumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			z, err := loadLocal(args[0])
+			z, err := loadEditable(args[0])
 			if err != nil {
 				return err
 			}
@@ -484,7 +554,13 @@ func (s *zoneSet) get(name string) (*zones.Zone, error) {
 	if z, ok := s.loaded[name]; ok {
 		return z, nil
 	}
-	z, err := zones.Load(name)
+	var z *zones.Zone
+	var err error
+	if rz := s.cfg.FindZone(name); rz != nil && rz.Overlay {
+		z, err = zones.LoadOverlay(name)
+	} else {
+		z, err = zones.Load(name)
+	}
 	if err == nil {
 		s.loaded[name] = z
 	}
@@ -507,9 +583,7 @@ func (s *zoneSet) commit() error {
 		if err != nil {
 			// undo the zones already activated so forward and reverse stay in step
 			for _, d := range done {
-				if zones.Rollback(d) == nil && unbound.Active() {
-					unbound.Control("auth_zone_reload", dns.Fqdn(d))
-				}
+				undoZone(s.cfg, s.loaded[d])
 			}
 			return err
 		}
@@ -522,7 +596,10 @@ func (s *zoneSet) commit() error {
 func (s *zoneSet) forwardZoneFor(name, zoneFlag string) (string, error) {
 	if zoneFlag != "" {
 		z := zones.NormalizeZone(zoneFlag)
-		if !s.cfg.HasLocalZone(z) {
+		if rz := s.cfg.FindZone(z); rz != nil && !rz.Overlay {
+			return "", readOnlyReplica(z)
+		}
+		if !s.cfg.HasLocalZone(z) && s.cfg.FindZone(z) == nil {
 			return "", fmt.Errorf("%w: no local zone %s", zones.ErrNotFound, z)
 		}
 		return z, nil
@@ -530,7 +607,13 @@ func (s *zoneSet) forwardZoneFor(name, zoneFlag string) (string, error) {
 	var forward []string
 	best := ""
 	fq := dns.Fqdn(strings.ToLower(name))
-	for _, z := range s.cfg.LocalZones {
+	candidates := append([]string(nil), s.cfg.LocalZones...)
+	for _, rz := range s.cfg.CloudZones {
+		if rz.Overlay {
+			candidates = append(candidates, rz.Name)
+		}
+	}
+	for _, z := range candidates {
 		if zones.IsReverse(z) {
 			continue
 		}

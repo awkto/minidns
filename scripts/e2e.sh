@@ -122,6 +122,83 @@ expect "removed zone no longer answers" "nobody.invalid" minidns test home.arpa 
 expect "names under it are gone"        "rcode +NXDOMAIN" minidns test laptop.home.arpa
 check  "unbound survived all of it"     unbound-control status
 
+echo "== cloud replica + local overlay (fake provider API) =="
+# a stand-in for the DigitalOcean API, so replicas are tested without a token
+FAKE=/tmp/fake-do; mkdir -p "$FAKE"
+cat > "$FAKE/server.py" <<'PY'
+import http.server, json, os
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        zone = self.path.rsplit('/', 1)[-1]
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), zone + '.zone')
+        if not os.path.exists(p):
+            self.send_response(404); self.end_headers(); return
+        body = json.dumps({"domain": {"name": zone, "zone_file": open(p).read()}}).encode()
+        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', 8953), H).serve_forever()
+PY
+fake_zone() { # fake_zone <serial> [extra record lines]
+  { printf '$ORIGIN replica.example.\n$TTL 1800\nreplica.example. IN SOA ns1.provider.example. hostmaster.replica.example. %s 10800 3600 604800 1800\n' "$1"
+    printf 'replica.example. 1800 IN NS ns1.provider.example.\nwww.replica.example. 300 IN A 203.0.113.10\napp.replica.example. 300 IN CNAME edge.cdn.example.\n'
+    shift; printf '%s\n' "$@"; } > "$FAKE/replica.example.zone"
+}
+fake_zone 1000
+python3 "$FAKE/server.py" & FAKE_PID=$!
+for _ in $(seq 1 20); do curl -fs http://127.0.0.1:8953/v2/domains/replica.example >/dev/null && break; sleep 0.2; done
+export MINIDNS_DO_API=http://127.0.0.1:8953
+REAL_DO_TOKEN="${DIGITALOCEAN_TOKEN:-}"; export DIGITALOCEAN_TOKEN=fake
+expect "cloud zone add pulls the zone"        "mirrored" minidns cloud zone add replica.example
+wait_dns
+expect "replica answers locally"               "203.0.113.10" minidns test www.replica.example
+expect_rc "a plain replica is read-only → exit 3" 3 minidns record add replica.example laptop A 10.0.0.5
+expect "…and says how to allow local records"  "cloud zone overlay enable replica.example" minidns record add replica.example laptop A 10.0.0.5
+expect "record list shows the provider's data" "digitalocean +203.0.113.10" minidns record list replica.example
+minidns reverse-zone add 10.0.0.0/24 >/dev/null; wait_dns
+CONF_SUM="$(md5sum < /etc/unbound/unbound.conf.d/minidns.conf)"
+expect "overlay enable"                        "Overlay enabled for replica.example" minidns cloud zone overlay enable replica.example
+expect "provider data still served"            "203.0.113.10" minidns test www.replica.example
+expect "overlay record add"                    "local overlay on replica replica.example" minidns record add replica.example laptop A 10.0.0.5 --managed-by minidhcp
+expect "overlay record resolves"               "10.0.0.5" minidns test laptop.replica.example
+expect "overlay hides a provider record and says so" "hides the provider's record: www.replica.example. A 203.0.113.10" minidns record add replica.example www A 10.0.0.80
+expect "…the overlay value is served"          "10.0.0.80" minidns test www.replica.example
+expect "overlay A replaces a provider CNAME"   "hides the provider's record: app.replica.example. CNAME" minidns record add replica.example app A 10.0.0.81
+expect "…and resolves"                         "10.0.0.81" minidns test app.replica.example
+expect_rc "apex NS cannot be overlaid → exit 3" 3 minidns record add replica.example @ NS ns.evil.test.
+expect "record list marks the source"          "overlay +10.0.0.5 +\(managed by minidhcp\)" minidns record list replica.example
+expect "record list --overlay --json"          "^3$" bash -c 'minidns record list replica.example --overlay --json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))"'
+expect "cloud zone list counts overlay records" "\+3 overlay record" minidns cloud zone list
+expect "host add works on an overlaid replica" "added +7.0.0.10.in-addr.arpa. PTR phone.replica.example." minidns host add phone --ip 10.0.0.7 --zone replica.example
+expect "…forward"                              "10.0.0.7" minidns test phone.replica.example
+expect "…reverse"                              "phone.replica.example" minidns test 7.0.0.10.in-addr.arpa PTR
+fake_zone 2000 'new.replica.example. 300 IN A 203.0.113.99'
+expect "sync merges new provider data"         "updated" minidns cloud zone sync replica.example
+expect "…new provider record served"           "203.0.113.99" minidns test new.replica.example
+expect "…overlay survives the sync"            "10.0.0.5" minidns test laptop.replica.example
+expect "…serial follows the provider"          "serial 2000 " minidns cloud zone list
+expect "sync again is a no-op"                 "unchanged" minidns cloud zone sync replica.example
+echo "garbage" > "$FAKE/replica.example.zone"
+expect_rc "unusable provider data is refused"  1 minidns cloud zone sync replica.example
+expect "…and the last good copy keeps serving" "10.0.0.5" minidns test laptop.replica.example
+fake_zone 2000 'new.replica.example. 300 IN A 203.0.113.99'
+expect "record remove from the overlay"        "Removed www.replica.example. A 10.0.0.80" minidns record remove replica.example www A
+expect "…the provider's record is back"        "203.0.113.10" minidns test www.replica.example
+check  "no unbound config change for any of it" test "$CONF_SUM" = "$(md5sum < /etc/unbound/unbound.conf.d/minidns.conf | cat)"
+expect_rc "overlay disable refuses while records exist → exit 5" 5 minidns cloud zone overlay disable replica.example
+expect_rc "cloud zone remove refuses too → exit 5" 5 minidns cloud zone remove replica.example
+expect "overlay disable --force"               "Overlay disabled" minidns cloud zone overlay disable replica.example --force
+expect "…provider data only again"             "edge.cdn.example" minidns test app.replica.example
+expect "…overlay names are gone"               "rcode +NXDOMAIN" minidns test laptop.replica.example
+minidns host remove phone --zone replica.example >/dev/null 2>&1
+expect "cloud zone remove"                     "removed zone replica.example" minidns cloud zone remove replica.example
+wait_dns
+minidns zone remove 0.0.10.in-addr.arpa --force >/dev/null; wait_dns
+check  "no overlay state left behind"          bash -c '! ls /var/lib/minidns/zones/overlay/replica.example.zone* /var/lib/minidns/zones/upstream/replica.example.zone 2>/dev/null | grep .'
+check  "unbound survived all of it"            unbound-control status
+kill $FAKE_PID 2>/dev/null; unset MINIDNS_DO_API
+if [ -n "$REAL_DO_TOKEN" ]; then export DIGITALOCEAN_TOKEN="$REAL_DO_TOKEN"; else unset DIGITALOCEAN_TOKEN; fi
+
 echo "== zone mirror (digitalocean) =="
 expect "unsafe zone name rejected" "not a valid zone name" minidns cloud zone add '../../etc/passwd' --provider digitalocean
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
