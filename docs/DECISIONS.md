@@ -32,4 +32,4 @@ Measured with a synthetic week of pi.dnsif.ca-scale traffic (1.3 M queries, 134 
 
 Privacy: the database is 0600 root, the log directory 0750 `unbound:adm`; backups carry devices and counts but not the individual queries unless `--with-queries`; the exporter never uses a domain or a client address as a label. Nothing leaves the host.
 
-The price is binary size: the pure-Go SQLite driver takes the static binary from 11 MB to 22 MB. Accepted — it keeps the single CGO-free binary (amd64 and arm64) and avoids a database service.
+The price is binary size: the pure-Go SQLite driver takes the static release binary from 11 MB to 16 MB. Accepted — it keeps the single CGO-free binary (amd64 and arm64) and avoids a database service.

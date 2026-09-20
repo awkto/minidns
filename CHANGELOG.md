@@ -20,7 +20,7 @@ any period, without anything leaving the host.
 - **Privacy**: the log directory is now `0750 unbound:adm` (it was world-readable), the database is `0600`; devices, statistics and the query log need `sudo`.
 - The exporter service runs as the unprivileged `unbound` user in a systemd sandbox instead of as root.
 - `logs` and `top` keep working with a deprecation warning (`query-log`, `stats`). `stats` is now the statistics overview; the resolver cache numbers it used to print are part of it.
-- Built with Go 1.25; the binary grows from 11 MB to 22 MB (the embedded database).
+- Built with Go 1.25; the binary grows from 11 MB to 16 MB (the embedded database).
 
 ## v0.2.0 — 2026-09-21
 
