@@ -1,6 +1,10 @@
 package qlog
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseLine(t *testing.T) {
 	e, ok := ParseLine("[1691577600] unbound[1234:0] query: 192.168.1.10 example.com. A IN")
@@ -25,5 +29,27 @@ func TestParseLine(t *testing.T) {
 
 	if _, ok := ParseLine("[1691577600] unbound[1234:0] info: start of service (unbound 1.19.2)."); ok {
 		t.Error("noise line should not parse")
+	}
+}
+
+func TestReadFromKeepsPartialLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "unbound.log")
+	full := "[1691577600] unbound[1:0] query: 10.0.0.2 a.example. A IN\n"
+	half := "[1691577601] unbound[1:0] query: 10.0.0.2 b.exam"
+	if err := os.WriteFile(p, []byte(full+half), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	off := readFrom(p, 0, func(e Entry) { got = append(got, e.Qname) })
+	if off != int64(len(full)) || len(got) != 1 || got[0] != "a.example" {
+		t.Fatalf("offset=%d got=%v", off, got)
+	}
+	// unbound finishes the line; the next read must deliver it whole
+	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("ple. A IN\n")
+	f.Close()
+	readFrom(p, off, func(e Entry) { got = append(got, e.Qname) })
+	if len(got) != 2 || got[1] != "b.example" {
+		t.Fatalf("partial line lost: %v", got)
 	}
 }

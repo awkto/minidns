@@ -146,27 +146,40 @@ func Follow(fn func(Entry)) error {
 		offset = st.Size()
 	}
 	for {
-		st, err := os.Stat(path)
-		if err == nil {
+		if st, err := os.Stat(path); err == nil {
 			if st.Size() < offset {
 				offset = 0 // truncated by rotation
 			}
 			if st.Size() > offset {
-				f, err := os.Open(path)
-				if err == nil {
-					f.Seek(offset, io.SeekStart)
-					sc := bufio.NewScanner(f)
-					sc.Buffer(make([]byte, 1<<20), 1<<20)
-					for sc.Scan() {
-						if e, ok := ParseLine(sc.Text()); ok {
-							fn(e)
-						}
-					}
-					offset, _ = f.Seek(0, io.SeekCurrent)
-					f.Close()
-				}
+				offset = readFrom(path, offset, fn)
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// readFrom parses the complete lines found after offset and returns the
+// offset just past the last one. A trailing line unbound is still writing
+// (no newline yet) is left for the next call rather than parsed half-done
+// and lost.
+func readFrom(path string, offset int64, fn func(Entry)) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return offset
+	}
+	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return offset
+	}
+	r := bufio.NewReaderSize(f, 1<<16)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return offset // partial line (or EOF): don't consume it
+		}
+		offset += int64(len(line))
+		if e, ok := ParseLine(strings.TrimRight(line, "\r\n")); ok {
+			fn(e)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,9 +39,15 @@ func cmdTest(args []string) error {
 	} else if entry, ok := rpz.Contains(paths.BlockRPZ(), name); ok && cfg.Firewall.Enabled {
 		verdict = fmt.Sprintf("blocked by firewall (matches %s)", entry)
 	} else if cfg.Adblock.Enabled {
+		// unbound applies the lists in sorted-name order (see unbound.Render)
+		names := make([]string, 0, len(cfg.Adblock.Lists))
 		for _, l := range cfg.Adblock.Lists {
-			if entry, ok := rpz.Contains(paths.AdblockRPZ(l.Name), name); ok {
-				verdict = fmt.Sprintf("blocked by adblock list %q (matches %s)", l.Name, entry)
+			names = append(names, l.Name)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			if entry, ok := rpz.Contains(paths.AdblockRPZ(n), name); ok {
+				verdict = fmt.Sprintf("blocked by adblock list %q (matches %s)", n, entry)
 				break
 			}
 		}
