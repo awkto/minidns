@@ -1,0 +1,26 @@
+# Architecture decisions
+
+Short log of material choices, newest last. Spec references are to `docs/SPEC.md`.
+
+## D1 — unbound is the engine (2026-09-20)
+The handover spec assumed BIND; v0.1.0 shipped on unbound and the owner chose to keep it. BIND may be added later as an optional second engine (tracker #59). Nothing is abstracted for that today — an engine interface gets designed when there is a second engine to fit it to.
+
+Practical notes recorded while comparing the two on Ubuntu 24.04: unbound's log carries replies with rcode, latency and cache-hit flags, and is built with dnstap; BIND 9.18 there has neither, and cannot forward over TLS.
+
+## D2 — No daemon, no API; SSH for remote (2026-09-20)
+Spec §2.3/§6. Remote management invokes the remote `minidns` binary over SSH and exchanges JSON. Periodic work (list updates, replica sync, log ingestion) runs from systemd timers. A long-running helper is only acceptable if a timer demonstrably cannot do the job.
+
+## D3 — Files stay canonical; SQLite holds only what files can't (2026-09-20)
+Spec §5.1 leaves this open. Zone files and RPZ files are what unbound actually reads, they diff and back up trivially, and having them as the single copy means the database and the active configuration cannot drift apart. `config.yaml` remains the settings file (the spec's TOML suggestion is a minor convention, §4). SQLite (`/var/lib/minidns/minidns.db`, pure-Go driver so the static build survives) holds devices, query events, rollups, ingestion cursors and sync/list metadata.
+
+## D4 — Devices are manual name↔IP; no MAC capture in MiniDNS (2026-09-20)
+A neighbour-table MAC capture was considered and dropped as over-engineered for this stage. `device_addresses` is time-bounded from the start so minidhcp lease history can be imported later (#60). Attribution is resolved when reading, not when ingesting, so naming a device fixes its history too.
+
+## D5 — Query statistics are local (2026-09-20)
+Measured on pi.dnsif.ca: ~190k queries/day, ~130 clients, ~8k distinct names/week; re-parsing a week of text logs takes 18 s. Hourly rollups keyed `(hour, client_ip, qname, qtype, result, blocked_by)` in SQLite answer every "top …" question locally. Prometheus/Postgres/Loki/Grafana remain optional sinks (#61) and never a dependency.
+
+## D6 — Two supported baselines (2026-09-20)
+Ubuntu 24.04 (unbound 1.19) and Debian 12 (unbound 1.17 — the production Pi). CI runs the end-to-end suite on both; every release is upgrade-tested from the previous one before it reaches a live host.
+
+## D7 — v0.1 command names survive one release as deprecated aliases (2026-09-20)
+v0.2.0 adopts the spec's `minidns <noun> <verb>` model. Old spellings keep working with a warning, except `zone` (now local authoritative zones; replicas move to `cloud zone`) and `blocklist` (now subscribed lists; manual entries are `block list`), whose meanings change.
