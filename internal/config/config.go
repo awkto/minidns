@@ -91,7 +91,7 @@ func Default() *Config {
 	c := &Config{
 		Listen:        []string{"0.0.0.0"},
 		Port:          53,
-		AllowNetworks: []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
+		AllowNetworks: []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10"},
 		Upstreams:     []string{"1.1.1.1", "1.0.0.1", "8.8.8.8"},
 		MsgCacheMB:    64,
 		RRsetCacheMB:  128,

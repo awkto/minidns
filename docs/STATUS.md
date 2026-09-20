@@ -7,8 +7,8 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §5.1 | Single source of truth, no silent drift | partial | files canonical (D3); no SQLite yet #43 |
 | §5.3 | Narrow privilege | complete | read-only commands run without root (config.yaml 0644, token in root-only credentials.yaml); changes need sudo, exit 8 (#67 #56) |
 | §6 | Targets, SSH remote, default rules | missing | #50 #51 #52 #53 |
-| §7.1 | `install` | partial | exists as `setup`; no platform gate #25; systemd-resolved #12 |
-| §7.2 | Secure defaults (closed recursion, no AXFR, hide version) | complete | RFC1918 ACLs, hide-identity/version; IPv6 ACLs #22 |
+| §7.1 | `install` | complete | platform gate, safe re-run, listen/ACL/privacy report (#25); `setup` deprecated |
+| §7.2 | Secure defaults (closed recursion, no AXFR, hide version) | complete | private v4+v6 ACLs, `::0` when the host has IPv6 (#22), hide-identity/version; `doctor` warns on public ACLs |
 | §7.3 | `status` | complete | |
 | §7.3 | `doctor`, `config show/validate/render/diff/apply` | complete | #29 #27 |
 | §8 | Global forwarders | complete | `forwarder add|remove|list|test`, DoT, IPv6 (#35); `upstream` deprecated |
@@ -32,13 +32,13 @@ Spec requirement → state in the code, as of v0.1.0 + the v0.1.1 work. `#n` = t
 | §15.4 | More providers | missing | Cloudflare #5, Route 53 #57, Azure #58 |
 | §16 | Transactional apply + rollback | partial | zones, overlays, forwarders, blocklist toggles and refreshes roll back on failure; remaining legacy writers #26 |
 | §16 | Backup / restore | complete | `backup create|list`, `restore` with safety backup + rollback; automatic backup before a config migration (#28) |
-| §17 | Noun-verb CLI, `--json`, exit codes, `--dry-run` | partial | cobra root, exit-code table, `--json` on new commands; v0.1 commands not yet renamed, no `--dry-run` #23 #24 |
+| §17 | Noun-verb CLI, `--json`, exit codes, `--dry-run` | complete* | all v0.2 nouns; old spellings deprecated (#24); `--dry-run` on record/host/forwarder/recursion/blocklist toggles, refused elsewhere (#23). *`logs`/`top`/`stats` become `query-log`/`stats` in v0.3 |
 | §19 | Input validation, path safety | complete | names validated before use in paths/config; write lock; restore refuses foreign archive paths |
 | §19 | Timeouts, size limits | complete | HTTP timeouts, 200 MB list cap, 10 MB provider response cap |
 | §20.1 | Unit tests | partial | rpz + qlog only; render golden tests #19 |
 | §20.2 | Integration tests on a real engine | partial | `scripts/e2e.sh` (Ubuntu only, manual) → CI matrix #18 |
 | §20.3 | Remote target tests | missing | #52 |
-| §20.4 | Acceptance scenario | missing | #37 |
+| §20.4 | Acceptance scenario | partial | `scripts/acceptance.sh` passes on both VMs; the device/query-log/stats steps are pending v0.3 (#37) |
 | §21 | Packaging (deb amd64/arm64, units, apt repo) | complete | upgrade re-render #13, upgrade harness #20 |
 | — | DoT upstream, serve-expired, Prometheus exporter | complete | kept (Amendment 4); derived metrics #49 |
 | §3.3 | BIND engine, minidhcp, external sinks, per-device policy | deferred | #59 #60 #61 #62 |

@@ -16,6 +16,10 @@
 - **`config show|validate|render|diff|apply`**: `validate` checks config.yaml, all zone files and the unbound config they would produce without touching anything; `diff` shows what `apply` would change.
 - **`backup create|list`** and **`restore <file>`**: configuration, credentials, local zones, overlay records, replica copies and manual rules in one private tarball (last 10 kept). `restore` backs up the current state first and puts it back if unbound rejects the restored one; archives with paths outside the minidns directories are refused. A backup is taken automatically before a config migration.
 - **`cloud provider set-token <provider>`** reads the token from stdin or `--from-file` — never from the command line.
+- **`install`** (was `setup`): refuses unsupported platforms before touching anything (Debian 12+, Ubuntu 22.04+, Raspberry Pi OS; amd64/arm64; `--force` overrides), and ends with where it listens, who it answers, a privacy note about query logging, and next commands. Re-running never overwrites config, zones or rules.
+- **IPv6**: new installs listen on `::0` as well when the host has IPv6, and allow `::1`, `fc00::/7` and `fe80::/10`. Existing configurations are not changed.
+- **`--dry-run`** for `record`, `host`, `forwarder`, `recursion` and `blocklist enable|disable`: the change is validated (zone parse, `unbound-checkconf` on the prospective config) and described, with the unbound config diff where there is one; nothing is written. Every other mutating command *refuses* `--dry-run` rather than ignore it.
+- `status --json`, `recursion status --json`. v0.1-style commands without JSON output (`logs`, `top`, `stats`) say so instead of printing text.
 - Every record change hot-reloads just that zone (cache untouched), verifies unbound serves the new serial, and rolls the file back if it doesn't.
 - `--json` on the new commands and a documented, stable exit-code table (2 usage, 3 invalid, 4 not found, 5 conflict, 6 apply failed, …). Shell completion via `minidns completion`.
 

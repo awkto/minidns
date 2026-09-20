@@ -527,6 +527,17 @@ func (z *Zone) Save() error {
 	return nil
 }
 
+// Check validates what Save would write, without writing it.
+func (z *Zone) Check() error {
+	data := z.Render(nextSerial(z.Serial, time.Now()))
+	if z.Overlay {
+		_, err := parse(z.Name, data)
+		return err
+	}
+	_, err := zonefile.Validate(z.Name, data)
+	return err
+}
+
 // Rollback restores the file that was active before the last save (or
 // removes the zone file if that save created it).
 func Rollback(name string) error { return rollback(paths.LocalZoneFile(NormalizeZone(name))) }

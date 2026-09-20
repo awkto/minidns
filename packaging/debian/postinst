@@ -18,7 +18,7 @@ if [ "$1" = "configure" ] && [ -n "$2" ] && [ -f /etc/minidns/config.yaml ]; the
     minidns apply || echo "minidns: WARNING: apply failed; the previous unbound config is still active. Run 'sudo minidns apply' to see why." >&2
 else
     echo ""
-    echo "minidns installed. Run:  sudo minidns setup"
+    echo "minidns installed. Run:  sudo minidns install"
     echo ""
 fi
 

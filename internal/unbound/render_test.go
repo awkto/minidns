@@ -144,3 +144,38 @@ func TestRPZOrderAllowFirst(t *testing.T) {
 		t.Errorf("RPZ order must be allow < block < adblock, got %d %d %d", a, b, c)
 	}
 }
+
+func TestRenderZoneForwardersAndIPv6(t *testing.T) {
+	cfg, prefix := sandbox(t)
+	cfg.Listen = []string{"0.0.0.0", "::0"}
+	cfg.Recursion = true // zone forwarders apply in either resolver mode
+	cfg.UpstreamTLS = true
+	cfg.Upstreams = []string{"2620:fe::fe", "9.9.9.9@853", "10.1.1.1@853#dns.corp.example"}
+	cfg.ZoneForwarders = []config.ZoneForwarder{
+		{Zone: "corp.example", Servers: []string{"10.20.0.53", "127.0.0.1@5353"}},
+		{Zone: "30.10.in-addr.arpa", Servers: []string{"10.30.0.53"}, TLS: true},
+	}
+	out := Render(cfg)
+	golden(t, "zone-forwarders", prefix, out)
+	for _, want := range []string{
+		"interface: ::0",
+		"do-not-query-localhost: no",
+		`local-zone: "30.10.in-addr.arpa." transparent`,
+		`domain-insecure: "corp.example."`,
+		"forward-addr: 10.30.0.53@853",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(out, `name: "."`) {
+		t.Error("global forwarders must not be rendered while full recursion is on")
+	}
+	cfg.Recursion = false
+	out = Render(cfg)
+	for _, want := range []string{"forward-addr: 2620:fe::fe@853#dns.quad9.net", "forward-addr: 9.9.9.9@853#dns.quad9.net", "forward-addr: 10.1.1.1@853#dns.corp.example"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+}

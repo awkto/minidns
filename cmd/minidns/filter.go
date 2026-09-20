@@ -674,6 +674,8 @@ func blocklistCmd() *cobra.Command {
 	}
 
 	markReadOnly(list, status)
-	bl.AddCommand(add, list, status, update, toggle("enable", true), toggle("disable", false), remove)
+	enable, disable := toggle("enable", true), toggle("disable", false)
+	supportsDryRun(enable, disable)
+	bl.AddCommand(add, list, status, update, enable, disable, remove)
 	return bl
 }

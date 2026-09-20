@@ -477,11 +477,15 @@ func recordCmd() *cobra.Command {
 	}
 
 	markReadOnly(list)
+	supportsDryRun(add, remove)
 	record.AddCommand(add, list, remove)
 	return record
 }
 
 func saveAndActivate(z *zones.Zone) error {
+	if dryRun {
+		return z.Check()
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -576,6 +580,12 @@ func (s *zoneSet) commit() error {
 	var done []string
 	for _, n := range names {
 		z := s.loaded[n]
+		if dryRun {
+			if err := z.Check(); err != nil {
+				return err
+			}
+			continue
+		}
 		err := z.Save()
 		if err == nil {
 			err = activateZone(s.cfg, z)
@@ -795,6 +805,7 @@ func hostCmd() *cobra.Command {
 	}
 	rename.Flags().StringVar(&mvZone, "zone", "", "forward zone (optional when unambiguous)")
 
+	supportsDryRun(add, remove, rename)
 	host.AddCommand(add, remove, rename)
 	return host
 }

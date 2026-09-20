@@ -16,6 +16,7 @@ import (
 
 	"github.com/awkto/minidns/internal/config"
 	"github.com/awkto/minidns/internal/paths"
+	"github.com/awkto/minidns/internal/unbound"
 	"github.com/awkto/minidns/internal/zones"
 )
 
@@ -33,6 +34,18 @@ func changeConfig(mutate func(cfg *config.Config) error) (*config.Config, error)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", zones.ErrInvalid, err)
+	}
+	if dryRun {
+		rendered := unbound.Render(cfg)
+		if err := unbound.CheckRendered(rendered); err != nil {
+			return nil, applyError{fmt.Errorf("unbound would reject this change: %w", err)}
+		}
+		if d := confDiff(rendered); d != "" {
+			note("unbound config change:\n%s", d)
+		} else {
+			note("(no change to the unbound config)")
+		}
+		return cfg, nil
 	}
 	if err := config.Save(cfg); err != nil {
 		return nil, err
@@ -280,6 +293,7 @@ func forwarderCmd() *cobra.Command {
 	test.Flags().StringVar(&testZone, "zone", "", "only this zone's forwarders")
 
 	markReadOnly(list, test)
+	supportsDryRun(add, remove)
 	fw.AddCommand(add, remove, list, test)
 	return fw
 }

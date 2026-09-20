@@ -64,11 +64,24 @@ func exitCodeFor(err error) int {
 // jsonOut is set by the global --json flag.
 var jsonOut bool
 
+// dryRun is set by the global --dry-run flag. A command may only run under
+// it when it is annotated as supporting it (see supportsDryRun): the change
+// is validated and described, but nothing is written or activated.
+var dryRun bool
+
 // emit prints v as JSON when --json is set, otherwise runs the human
 // renderer. Structured output goes to stdout only; messages for people that
 // accompany a JSON result go to stderr so stdout stays parseable.
 func emit(v any, human func()) error {
+	if dryRun {
+		if m, ok := v.(map[string]any); ok {
+			m["dry_run"] = true
+		}
+	}
 	if !jsonOut {
+		if dryRun {
+			fmt.Println("DRY RUN — nothing was changed. This is what would have happened:")
+		}
 		human()
 		return nil
 	}

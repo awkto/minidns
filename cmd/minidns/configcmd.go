@@ -46,6 +46,23 @@ func validateAll() (*config.Config, []string, error) {
 	return cfg, problems, nil
 }
 
+// confDiff compares the active unbound config with a candidate ("" = same).
+func confDiff(candidate string) string {
+	dir, err := os.MkdirTemp("", "minidns-diff")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(dir)
+	next := filepath.Join(dir, "new")
+	os.WriteFile(next, []byte(candidate), 0o644)
+	active := paths.UnboundConfFile()
+	if _, err := os.Stat(active); err != nil {
+		active = "/dev/null"
+	}
+	out, _ := exec.Command("diff", "-u", "--label", "active: "+paths.UnboundConfFile(), "--label", "after the change", active, next).CombinedOutput()
+	return string(out)
+}
+
 func configCmd() *cobra.Command {
 	cc := &cobra.Command{Use: "config", Short: "Inspect, validate and apply the configuration"}
 
@@ -110,24 +127,13 @@ func configCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			dir, err := os.MkdirTemp("", "minidns-diff")
-			if err != nil {
-				return err
-			}
-			defer os.RemoveAll(dir)
-			next := filepath.Join(dir, "new")
-			os.WriteFile(next, []byte(unbound.Render(cfg)), 0o644)
-			active := paths.UnboundConfFile()
-			if _, err := os.Stat(active); err != nil {
-				active = "/dev/null"
-			}
-			out, _ := exec.Command("diff", "-u", "--label", "active: "+paths.UnboundConfFile(), "--label", "after `minidns apply`", active, next).CombinedOutput()
-			return emit(map[string]any{"changed": len(out) > 0, "diff": string(out)}, func() {
+			out := confDiff(unbound.Render(cfg))
+			return emit(map[string]any{"changed": len(out) > 0, "diff": out}, func() {
 				if len(out) == 0 {
 					fmt.Println("No differences: the active unbound config is what config.yaml describes.")
 					return
 				}
-				fmt.Print(string(out))
+				fmt.Print(out)
 			})
 		},
 	}

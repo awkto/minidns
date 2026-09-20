@@ -38,8 +38,17 @@ apt-get install -y -qq "$DEB" curl python3 >/dev/null 2>&1 || apt-get install -y
 check "minidns binary installed" minidns version
 check "unbound dependency pulled in" which unbound
 
-echo "== setup =="
-minidns setup 2>&1 | tail -12
+echo "== install =="
+cp /etc/os-release /tmp/os-release.real
+sed 's/^ID=.*/ID=fedora/; s/^PRETTY_NAME=.*/PRETTY_NAME="Fedora Linux 40"/' /tmp/os-release.real > /tmp/os-release.fake
+cat /tmp/os-release.fake > /etc/os-release
+expect "an unsupported platform is refused" "Fedora Linux 40 is not a supported platform" minidns install
+check  "…before anything was written" test ! -e /etc/minidns/config.yaml
+cat /tmp/os-release.real > /etc/os-release
+minidns install 2>&1 | tail -14
+expect "install reports where it listens and the privacy note" "query logging +ON" bash -c 'minidns install 2>&1'
+expect "re-running never overwrites the config" "msg_cache_mb: 64" cat /etc/minidns/config.yaml
+expect "v0.1 spelling: setup" "deprecated" minidns setup
 check "unbound config generated" test -f /etc/unbound/unbound.conf.d/minidns.conf
 check "stevenblack list downloaded" test -s /var/lib/minidns/rpz/adblock-stevenblack.rpz
 check "unbound-checkconf accepts config" unbound-checkconf
@@ -51,6 +60,12 @@ wait_dns
 check "unbound is answering" minidns test google.com
 
 echo "== resolution =="
+if grep -q '"::0"\|- ::0' /etc/minidns/config.yaml; then
+  expect "IPv6: listens on ::0 and answers on ::1" "NOERROR" minidns query example.org --server ::1
+else
+  echo "SKIP: host has no IPv6, install did not add ::0"
+fi
+expect "IPv6 private ranges are in the default ACL" "fc00::/7" cat /etc/minidns/config.yaml
 expect "google.com resolves NOERROR" "rcode +NOERROR" minidns test google.com
 expect "cache hit is fast" "rcode +NOERROR" minidns test google.com
 
@@ -345,6 +360,21 @@ cp /tmp/config.good /etc/minidns/config.yaml
 minidns zone add backup.example >/dev/null; wait_dns
 minidns record add backup.example www A 10.9.9.9 >/dev/null
 minidns block add kept.example.org >/dev/null
+
+echo "== --dry-run and --json on the remaining commands =="
+expect "record add --dry-run describes the change"  "DRY RUN" minidns record add backup.example dry A 10.9.9.1 --dry-run
+expect "…and makes none"                            "NXDOMAIN" minidns query dry.backup.example
+expect_rc "…an invalid change still fails → exit 3" 3 minidns record add backup.example dry A nonsense --dry-run
+expect "forwarder add --dry-run shows the unbound config diff" '^\+ +name: "dry.example."' minidns forwarder add 10.0.0.53 --zone dry.example --dry-run
+check  "…and config.yaml is untouched"              bash -c '! grep -q dry.example /etc/minidns/config.yaml'
+expect "--dry-run --json marks the result"          '"dry_run": true' minidns host add dryhost --ip 10.9.9.2 --zone backup.example --dry-run --json
+expect_rc "a command without dry-run support refuses instead of acting → exit 2" 2 minidns zone add dry-zone.example --dry-run
+check  "…nothing was created"                       bash -c '! minidns zone list | grep -q dry-zone'
+expect_rc "same for the v0.1-style commands → exit 2" 2 minidns block never.example.org --dry-run
+expect "status --json"                              '"mode": "forwarding"' minidns status --json
+expect "recursion status --json"                    '"recursion": false' minidns recursion status --json
+expect_rc "a command without JSON output says so → exit 2" 2 minidns logs --json
+
 expect "backup create"                    "Backup written" minidns backup create
 expect "backups are private"              "^600 " bash -c 'stat -c "%a %n" /var/lib/minidns/backups/*.tar.gz | head -1'
 BACKUP="$(ls /var/lib/minidns/backups/*.tar.gz | tail -1)"

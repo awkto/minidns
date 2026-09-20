@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -27,11 +28,61 @@ const (
 func legacy(use, short, group string, readOnly bool, run func([]string) error) *cobra.Command {
 	c := &cobra.Command{
 		Use: use, Short: short, GroupID: group, DisableFlagParsing: true,
-		RunE: func(cmd *cobra.Command, args []string) error { return run(args) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// flag parsing is off for these, so the global --json is handled here
+			rest := args[:0:0]
+			for _, a := range args {
+				if a == "--json" {
+					jsonOut = true
+				} else {
+					rest = append(rest, a)
+				}
+			}
+			if jsonOut && cmd.Annotations["json"] != "true" {
+				return usagef("`minidns %s` has no --json output yet", cmd.Name())
+			}
+			return run(rest)
+		},
 	}
 	if readOnly {
 		markReadOnly(c)
 	}
+	return c
+}
+
+// noArgs makes a legacy command that takes none say so instead of silently
+// ignoring what it was given.
+func noArgs(c *cobra.Command) *cobra.Command {
+	run := c.RunE
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		var stray []string
+		for _, a := range args {
+			if a != "--json" { // handled by the legacy wrapper
+				stray = append(stray, a)
+			}
+		}
+		if len(stray) > 0 {
+			return usagef("`minidns %s` takes no arguments (got %q)", cmd.Name(), strings.Join(stray, " "))
+		}
+		return run(cmd, args)
+	}
+	return c
+}
+
+func supportsDryRun(cmds ...*cobra.Command) {
+	for _, c := range cmds {
+		if c.Annotations == nil {
+			c.Annotations = map[string]string{}
+		}
+		c.Annotations["dryrun"] = "true"
+	}
+}
+
+func withJSON(c *cobra.Command) *cobra.Command {
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations["json"] = "true"
 	return c
 }
 
@@ -69,6 +120,12 @@ func rootCmd() *cobra.Command {
 			// unbound runs unprivileged and has to read what we write; don't
 			// let a restrictive root umask make zone and config files unreadable
 			syscall.Umask(0o022)
+			if dryRun && cmd.Annotations["dryrun"] != "true" {
+				if cmd.Annotations["readonly"] == "true" {
+					return usagef("`%s` changes nothing, so --dry-run does not apply", cmd.CommandPath())
+				}
+				return usagef("`%s` does not support --dry-run (nothing was changed)", cmd.CommandPath())
+			}
 			if cmd.Annotations["readonly"] == "true" || cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "__complete" {
 				return nil
 			}
@@ -80,6 +137,7 @@ func rootCmd() *cobra.Command {
 	}
 	root.SetVersionTemplate("minidns {{.Version}}\n")
 	root.PersistentFlags().BoolVar(&jsonOut, "json", false, "machine-readable output on stdout")
+	root.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "validate and describe a change without making it (record, host, forwarder, recursion, blocklist enable|disable)")
 	root.AddGroup(
 		&cobra.Group{ID: groupSetup, Title: "Setup"},
 		&cobra.Group{ID: groupDNS, Title: "Zones and records"},
@@ -102,10 +160,10 @@ func rootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(
-		legacy("setup", "First run: config, unbound, timers, lists", groupSetup, false, cmdSetup),
-		legacy("apply", "Regenerate the unbound config and reload", groupSetup, false, func([]string) error { return cmdApply(true) }),
+		installCmd(), setupAliasCmd(),
+		noArgs(legacy("apply", "Regenerate the unbound config and reload", groupSetup, false, func([]string) error { return cmdApply(true) })),
 		doctorCmd(), setupGroup(configCmd()), setupGroup(backupCmd()), setupGroup(restoreCmd()),
-		legacy("status", "Service, mode, blocking and zone summary", groupSetup, true, cmdStatus),
+		withJSON(noArgs(legacy("status", "Service, mode, blocking and zone summary", groupSetup, true, cmdStatus))),
 		legacy("test <domain> [type]", "Resolve via the local server and show the policy verdict", groupSetup, true, cmdTest),
 
 		zone, record, rzone, host, cloud,
@@ -117,11 +175,11 @@ func rootCmd() *cobra.Command {
 
 		forwarder, query,
 		hide(legacy("upstream [set <addr>... [--tls]]", "Show or set upstream forwarders", groupResolver, false, cmdUpstream)),
-		legacy("recursion on|off|status", "Full recursion instead of forwarding", groupResolver, false, cmdRecursion),
+		recursionCmd(),
 
 		legacy("logs [-n N] [-f] [--client IP] [--blocked]", "Query log", groupObserve, true, cmdLogs),
 		legacy("top [-n N] [--clients] [--client IP] [--since 24h]", "Top domains or clients", groupObserve, true, cmdTop),
-		legacy("stats", "unbound cache and query statistics", groupObserve, true, cmdStats),
+		noArgs(legacy("stats", "unbound cache and query statistics", groupObserve, true, cmdStats)),
 		legacy("exporter", "Run the Prometheus exporter", groupObserve, true, cmdExporter),
 		&cobra.Command{Use: "version", Short: "Print the version", Annotations: map[string]string{"readonly": "true"},
 			Run: func(*cobra.Command, []string) { fmt.Println("minidns", version) }},
