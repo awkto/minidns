@@ -26,8 +26,9 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: |
-          go build -trimpath -ldflags "-s -w -X main.version=v0.0.0-ci" -o minidns-linux-amd64 ./cmd/minidns
-          bash scripts/build-deb.sh 0.0.0~ci${{ github.run_number }} amd64 minidns-linux-amd64
+          # 99.x so the upgrade test really is an upgrade from any release
+          go build -trimpath -ldflags "-s -w -X main.version=v99.0.0-ci${{ github.run_number }}" -o minidns-linux-amd64 ./cmd/minidns
+          bash scripts/build-deb.sh 99.0.0~ci${{ github.run_number }} amd64 minidns-linux-amd64
       - uses: actions/upload-artifact@v4
         with:
           name: deb
@@ -55,4 +56,4 @@ jobs:
       - name: upgrade from the previous release
         env:
           DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
-        run: docker run --rm -v "$PWD:/work" -e DIGITALOCEAN_TOKEN -e FROM_VERSION=v0.1.0 ${{ matrix.image }} bash /work/scripts/upgrade-test.sh
+        run: docker run --rm -v "$PWD:/work" -e DIGITALOCEAN_TOKEN ${{ matrix.image }} bash /work/scripts/upgrade-test.sh

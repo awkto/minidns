@@ -76,8 +76,8 @@ jobs:
           name: minidns-amd64
       - name: end-to-end (fresh install)
         run: docker run --rm -v "$PWD:/work" ${{ matrix.image }} bash /work/scripts/e2e.sh
-      - name: upgrade from v0.1.0
-        run: docker run --rm -v "$PWD:/work" -e FROM_VERSION=v0.1.0 ${{ matrix.image }} bash /work/scripts/upgrade-test.sh
+      - name: upgrade from the previous release
+        run: docker run --rm -v "$PWD:/work" ${{ matrix.image }} bash /work/scripts/upgrade-test.sh
 
   release:
     needs: [build, e2e]

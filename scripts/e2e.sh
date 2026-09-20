@@ -22,7 +22,8 @@ expect() { # expect <desc> <pattern> <cmd...>
 
 # unbound reloads the big RPZ zones on every config change and refuses
 # connections while it does — poll instead of guessing a sleep
-wait_dns() { for _ in $(seq 1 60); do minidns test localhost >/dev/null 2>&1 && return 0; sleep 0.5; done; echo "unbound did not come back within 30s"; return 1; }
+wait_dns() { for _ in $(seq 1 60); do minidns test localhost >/dev/null 2>&1 && return 0; sleep 0.5; done; echo "unbound did not come back within 30s"; diag; return 1; }
+diag() { echo "--- diagnostics"; pgrep -a unbound || echo "(no unbound process)"; unbound-control status 2>&1 | head -3; grep -vE " (query|reply): | rpz: applied " /var/log/minidns/unbound.log | tail -15; echo "---"; }
 
 export DEBIAN_FRONTEND=noninteractive
 echo "== install =="

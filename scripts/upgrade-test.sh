@@ -8,6 +8,11 @@
 #   docker run --rm -v $PWD:/work debian:12 bash /work/scripts/upgrade-test.sh
 #   FROM_VERSION=v0.1.0 CANDIDATE=/path/to.deb bash upgrade-test.sh
 set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+command -v curl >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq curl >/dev/null 2>&1; }
+# default: whatever release is currently published (the redirect avoids the
+# rate-limited API)
+FROM_VERSION="${FROM_VERSION:-$(curl -fsSI https://github.com/awkto/minidns/releases/latest 2>/dev/null | tr -d '\r' | awk -F/ 'tolower($1) ~ /^location:/ {print $NF}')}"
 FROM_VERSION="${FROM_VERSION:-v0.1.0}"
 ARCH="$(dpkg --print-architecture)"
 CANDIDATE="${CANDIDATE:-$(ls /work/minidns_*_"$ARCH".deb | sort -V | tail -1)}"
