@@ -1,0 +1,28 @@
+# Changelog
+
+## v0.1.1 — 2026-09-20
+
+Bug-fix release. No command changes; the generated unbound config is
+byte-identical to v0.1.0's, so upgrading does not restart unbound.
+
+### Fixed
+- **Wildcard blocks were silently deleted.** `minidns block '*.example.com'` was accepted but hidden from `blocklist` and dropped by the next `block`/`unblock`.
+- **Flags after an argument were rejected**, so the README's own examples failed: `adblock list add <url> --name x --format rpz`, `zone add example.com --provider …`, `zone sync <zone> --quiet`.
+- **`setup` failed on stock Ubuntu** with "can't bind socket: Address already in use for 0.0.0.0 port 53". Setup now turns off systemd-resolved's stub listener with a drop-in and repoints `/etc/resolv.conf` at resolved's uplink file, so the host keeps resolving as before. Removing the package undoes both.
+- **Package upgrades now re-apply the configuration** (validated, with the previous config kept if validation fails). unbound is left alone when the generated config did not change.
+- **A bad provider response can no longer replace a working replica**: fetched zone data must parse, have one SOA at the apex and stay inside the zone before it is activated.
+- `test` named the wrong blocklist when several were configured (it checked them in a different order than unbound applies them).
+- `logs -f` could lose a line that unbound was still writing.
+- Files are written world-readable regardless of root's umask (a `umask 077` root shell used to produce zone files unbound could not read, which took the daemon down on reload).
+
+### Security
+- Blocklist and zone names are validated before they are used in file names and generated config (`--name ../../x` is refused; a hand-edited config with such names is rejected at load).
+- Mutating commands take an exclusive lock, so the adblock/zonesync timers and an interactive command can no longer rewrite the same files concurrently.
+
+### Project
+- CI on every push: gofmt, vet, unit tests, golden-file tests for the unbound config, and the end-to-end suite on Ubuntu 24.04 and Debian 12, plus an upgrade test from the previous release. Releases are gated on the same tests.
+- `docs/SPEC.md`, `docs/DECISIONS.md`, `docs/STATUS.md`, `docs/ROLLOUT.md`.
+
+## v0.1.0 — 2026-08-08
+
+First release: unbound-based home DNS with firewall, adblock, DigitalOcean zone mirror, query logs and Prometheus metrics.

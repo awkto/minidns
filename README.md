@@ -33,6 +33,11 @@ sudo minidns setup
 Point your router's DHCP DNS at the host's LAN IP and you're done. Debs are
 also attached to [GitHub releases](https://github.com/awkto/minidns/releases).
 
+Supported and tested on every push: **Ubuntu 24.04** and **Debian 12**
+(including Raspberry Pi OS), amd64 and arm64. On Ubuntu, `setup` takes port 53
+over from systemd-resolved's stub listener and gives it back if you remove the
+package.
+
 ## Usage
 
 ```
