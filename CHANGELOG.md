@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased (v0.2.0)
+## v0.2.0 — 2026-09-21
+
+minidns grows from "resolver + blocking" into a small DNS server manager: local
+authoritative zones and records, hosts with their PTRs, overlay records on cloud
+replicas, per-zone forwarders, a query tool, `doctor`, backups — behind a
+consistent `minidns <noun> <verb>` command line with `--json`, `--dry-run` and
+stable exit codes. Every v0.1 command keeps working (with a deprecation
+warning). For a v0.1 configuration the generated unbound config is
+byte-identical, so **upgrading does not restart unbound**; `config.yaml` is
+migrated in place with the original kept.
 
 ### Added
 - **Local authoritative zones**: `zone add|list|show|remove`. Zone files are the single copy of the data, rendered deterministically, serial bumped automatically, served by unbound auth-zones.
@@ -28,8 +37,13 @@
 
 - **Provider tokens moved out of `config.yaml`** into `/etc/minidns/credentials.yaml` (root-only). A token found in config.yaml is moved on upgrade (the untouched original stays in `config.yaml.pre-v0.2`, mode 0600). config.yaml is now world-readable — unless a blocklist URL carries credentials — so **read-only commands work without sudo** (`status`, `query`, `test`, `block explain`, `zone|record|forwarder|blocklist list`, `config show`, `doctor`). Commands that change the system say so and exit 8 when run without root.
 - `upstream`, `block <domain>`, `unblock`, `allow <domain>`, `unallow`, `blocklist` (no verb) and `adblock …` keep working with a deprecation warning. The blocklist timer now calls `blocklist update`.
-- Configuration changes made by the new commands are transactional: validated, applied, and `config.yaml` plus the generated unbound config restored if unbound rejects them.
+- **Configuration changes are transactional**: validated, applied, and `config.yaml` plus the generated unbound config restored if unbound rejects them (exit 6). `config.yaml` itself is validated more strictly (listen addresses, port, `allow_networks`).
+- `apply` reloads unbound instead of restarting it, unless an option that is only read at startup changed (TLS bundle, interfaces, port, threads).
 - With DNS-over-TLS, forwarders given as `ip@853` now also get the well-known TLS name of Cloudflare/Google/Quad9 (their certificates are actually verified); IPv6 addresses of the same providers are recognized.
+
+### Testing
+- The end-to-end suite grew to 225 checks and runs on Ubuntu 24.04 and Debian 12 on amd64 **and on arm64** (native runner), each followed by an upgrade test from the previous release; replicas are tested against a stand-in provider API, so CI covers them without a token. Releases are gated on all of it.
+- `scripts/acceptance.sh` (the spec's acceptance scenario) and `scripts/upgrade-pi-shape.sh` (upgrade + rollback rehearsal of a host shaped like the first production install) run on real systemd VMs.
 
 ## v0.1.1 — 2026-09-20
 
