@@ -46,9 +46,11 @@ echo "== build state on $FROM_VERSION =="
 minidns block blocked.upgrade.example >/dev/null
 minidns allow doubleclick.net >/dev/null
 minidns upstream set 1.1.1.1 1.0.0.1 --tls >/dev/null; restart_unbound; wait_dns
+# the way the v0.1 README said to do it: the provider token inline in config.yaml
+PLANTED="${DIGITALOCEAN_TOKEN:-dop_v1_upgrade_test_placeholder}"
+sed -i "s|^\\( *\\)token: \"\"|\\1token: $PLANTED|" /etc/minidns/config.yaml
+grep -q "token: $PLANTED" /etc/minidns/config.yaml || { echo "could not plant the token"; exit 1; }
 if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
-  ( umask 077; printf '%s' "$DIGITALOCEAN_TOKEN" > /etc/minidns/do.token )
-  sed -i 's|token_file: ""|token_file: /etc/minidns/do.token|' /etc/minidns/config.yaml
   minidns zone add "${E2E_ZONE:-dnsif.ca}" >/dev/null 2>&1
 fi
 wait_dns
@@ -72,6 +74,16 @@ else
   check "config.yaml untouched"           cmp /tmp/config.yaml.before /etc/minidns/config.yaml
 fi
 check  "unbound-checkconf accepts config" unbound-checkconf
+if [ -f /etc/minidns/credentials.yaml ]; then   # v0.2+
+  check  "provider token left config.yaml"   bash -c "! grep -q '$PLANTED' /etc/minidns/config.yaml"
+  expect "…into the credentials file"         "$PLANTED" cat /etc/minidns/credentials.yaml
+  expect "…which only root can read"          "^600 " stat -c "%a %n" /etc/minidns/credentials.yaml
+  expect "config.yaml is world-readable now"  "^644 " stat -c "%a %n" /etc/minidns/config.yaml
+  expect "the pre-upgrade copy stays private" "^600 " stat -c "%a %n" /etc/minidns/config.yaml.pre-v0.2
+  if [ -n "${DIGITALOCEAN_TOKEN:-}" ]; then
+    check "replica sync works from the credentials file" env -u DIGITALOCEAN_TOKEN minidns cloud zone sync
+  fi
+fi
 expect "manual block still listed"   "block blocked.upgrade.example" minidns blocklist
 expect "allow entry still listed"    "allow doubleclick.net"         minidns blocklist
 expect "block still enforced"        "rcode +NXDOMAIN" minidns test blocked.upgrade.example

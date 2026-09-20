@@ -35,6 +35,11 @@ func legacy(use, short, group string, readOnly bool, run func([]string) error) *
 	return c
 }
 
+func setupGroup(c *cobra.Command) *cobra.Command {
+	c.GroupID = groupSetup
+	return c
+}
+
 func hide(c *cobra.Command) *cobra.Command {
 	c.Hidden = true
 	return c
@@ -67,6 +72,9 @@ func rootCmd() *cobra.Command {
 			if cmd.Annotations["readonly"] == "true" || cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "__complete" {
 				return nil
 			}
+			if os.Geteuid() != 0 && os.Getenv("MINIDNS_PREFIX") == "" {
+				return fmt.Errorf("%w: `%s` changes the system — run it with sudo", os.ErrPermission, cmd.CommandPath())
+			}
 			return lockState()
 		},
 	}
@@ -96,6 +104,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(
 		legacy("setup", "First run: config, unbound, timers, lists", groupSetup, false, cmdSetup),
 		legacy("apply", "Regenerate the unbound config and reload", groupSetup, false, func([]string) error { return cmdApply(true) }),
+		doctorCmd(), setupGroup(configCmd()), setupGroup(backupCmd()), setupGroup(restoreCmd()),
 		legacy("status", "Service, mode, blocking and zone summary", groupSetup, true, cmdStatus),
 		legacy("test <domain> [type]", "Resolve via the local server and show the policy verdict", groupSetup, true, cmdTest),
 

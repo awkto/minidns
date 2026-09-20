@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,10 +99,11 @@ func Stats() (map[string]string, error) {
 // CheckConf validates the full unbound configuration. If unbound isn't
 // installed yet (dev environments) validation is skipped.
 func CheckConf() error {
-	if _, err := exec.LookPath("unbound-checkconf"); err != nil {
+	bin, err := FindBin("unbound-checkconf")
+	if err != nil {
 		return nil
 	}
-	out, err := exec.Command("unbound-checkconf").CombinedOutput()
+	out, err := exec.Command(bin).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("unbound-checkconf: %s", strings.TrimSpace(string(out)))
 	}
@@ -138,4 +140,55 @@ func Active() bool {
 		return true
 	}
 	return exec.Command("systemctl", "is-active", "--quiet", "unbound").Run() == nil
+}
+
+// CheckRendered validates a candidate minidns.conf without installing it:
+// unbound-checkconf runs on a throw-away main config that includes every
+// other active fragment plus the candidate.
+func CheckRendered(content string) error {
+	bin, err := FindBin("unbound-checkconf")
+	if err != nil {
+		return nil
+	}
+	dir, err := os.MkdirTemp("", "minidns-check")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	candidate := filepath.Join(dir, "minidns.conf")
+	if err := os.WriteFile(candidate, []byte(content), 0o644); err != nil {
+		return err
+	}
+	var main strings.Builder
+	others, _ := filepath.Glob(filepath.Join(paths.UnboundConfD(), "*.conf"))
+	for _, o := range others {
+		if o != paths.UnboundConfFile() {
+			fmt.Fprintf(&main, "include: %q\n", o)
+		}
+	}
+	fmt.Fprintf(&main, "include: %q\n", candidate)
+	mainFile := filepath.Join(dir, "unbound.conf")
+	if err := os.WriteFile(mainFile, []byte(main.String()), 0o644); err != nil {
+		return err
+	}
+	out, err := exec.Command(bin, mainFile).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("unbound-checkconf: %s", strings.TrimSpace(strings.ReplaceAll(string(out), dir+"/", "")))
+	}
+	return nil
+}
+
+// FindBin locates an unbound tool. A normal user's PATH on Debian has no
+// sbin directories, where these live.
+func FindBin(name string) (string, error) {
+	if p, err := exec.LookPath(name); err == nil {
+		return p, nil
+	}
+	for _, dir := range []string{"/usr/sbin", "/sbin", "/usr/local/sbin"} {
+		p := filepath.Join(dir, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found", name)
 }

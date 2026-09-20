@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,7 +68,7 @@ type Config struct {
 
 	Providers struct {
 		DigitalOcean struct {
-			Token     string `yaml:"token"`
+			Token     string `yaml:"token,omitempty"` // v0.1 only; moved to the credentials file on save
 			TokenFile string `yaml:"token_file"`
 		} `yaml:"digitalocean"`
 	} `yaml:"providers"`
@@ -129,6 +130,9 @@ func Load() (*Config, error) {
 		c.LegacyZones = nil
 		c.Migrated = true
 	}
+	if strings.TrimSpace(c.Providers.DigitalOcean.Token) != "" {
+		c.Migrated = true // Save moves the token to the credentials file
+	}
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", paths.ConfigFile(), err)
 	}
@@ -186,8 +190,65 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Save writes the config with 0600 perms (it may hold provider tokens).
+// Credentials is the content of paths.CredentialsFile() (root-only).
+type Credentials struct {
+	DigitalOcean struct {
+		Token string `yaml:"token"`
+	} `yaml:"digitalocean"`
+}
+
+// LoadCredentials reads the credentials file; a missing file is empty.
+func LoadCredentials() (*Credentials, error) {
+	cr := &Credentials{}
+	b, err := os.ReadFile(paths.CredentialsFile())
+	if os.IsNotExist(err) {
+		return cr, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return cr, yaml.Unmarshal(b, cr)
+}
+
+// SaveCredentials writes the credentials file, readable by root only.
+func SaveCredentials(cr *Credentials) error {
+	b, err := yaml.Marshal(cr)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(paths.ConfigDir(), 0o755); err != nil {
+		return err
+	}
+	return writeFile(paths.CredentialsFile(), b, 0o600)
+}
+
+func writeFile(path string, b []byte, mode os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, mode); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil { // WriteFile's mode is subject to the umask
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Save writes config.yaml. Secrets do not belong in it: a provider token
+// still found there (v0.1 layout) is moved to the credentials file, and the
+// config is then world-readable so that read-only commands work without
+// root — unless a blocklist URL carries credentials, which keeps it private.
 func Save(c *Config) error {
+	if t := strings.TrimSpace(c.Providers.DigitalOcean.Token); t != "" {
+		cr, err := LoadCredentials()
+		if err != nil {
+			return err
+		}
+		cr.DigitalOcean.Token = t
+		if err := SaveCredentials(cr); err != nil {
+			return err
+		}
+		c.Providers.DigitalOcean.Token = ""
+	}
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err
@@ -195,18 +256,37 @@ func Save(c *Config) error {
 	if err := os.MkdirAll(paths.ConfigDir(), 0o755); err != nil {
 		return err
 	}
-	tmp := paths.ConfigFile() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
+	mode := os.FileMode(0o644)
+	if c.holdsSecrets() {
+		mode = 0o600
 	}
-	return os.Rename(tmp, paths.ConfigFile())
+	return writeFile(paths.ConfigFile(), b, mode)
 }
 
-// DOToken resolves the DigitalOcean API token from config, token_file,
-// or the DIGITALOCEAN_TOKEN environment variable.
+func (c *Config) holdsSecrets() bool {
+	for _, l := range c.Adblock.Lists {
+		if u, err := url.Parse(l.URL); err != nil || u.User != nil || u.RawQuery != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// DOToken resolves the DigitalOcean API token: a token still in config.yaml
+// (v0.1 layout), the credentials file, token_file, or the DIGITALOCEAN_TOKEN
+// environment variable.
 func (c *Config) DOToken() (string, error) {
+	// a token (still) in config.yaml is the most recent thing the operator
+	// typed; the next Save moves it to the credentials file
 	if t := strings.TrimSpace(c.Providers.DigitalOcean.Token); t != "" {
 		return t, nil
+	}
+	cr, err := LoadCredentials()
+	if err != nil && os.IsPermission(err) {
+		return "", fmt.Errorf("reading the provider token needs root: %w", err)
+	}
+	if err == nil && strings.TrimSpace(cr.DigitalOcean.Token) != "" {
+		return strings.TrimSpace(cr.DigitalOcean.Token), nil
 	}
 	if f := c.Providers.DigitalOcean.TokenFile; f != "" {
 		b, err := os.ReadFile(f)
@@ -218,7 +298,7 @@ func (c *Config) DOToken() (string, error) {
 	if t := os.Getenv("DIGITALOCEAN_TOKEN"); t != "" {
 		return strings.TrimSpace(t), nil
 	}
-	return "", fmt.Errorf("no DigitalOcean token: set providers.digitalocean.token in %s (or token_file / DIGITALOCEAN_TOKEN)", paths.ConfigFile())
+	return "", fmt.Errorf("no DigitalOcean token: set one with `minidns cloud provider set-token digitalocean` (or token_file in %s / DIGITALOCEAN_TOKEN)", paths.ConfigFile())
 }
 
 // FindZone returns the cloud replica entry for name, if any.

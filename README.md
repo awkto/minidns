@@ -41,6 +41,7 @@ package.
 ## Usage
 
 ```
+minidns doctor                          health checks with a fix hint per finding
 minidns status                          what's running, what's blocked, what's mirrored
 minidns test doubleclick.net            resolve locally + explain the policy verdict
 
@@ -77,18 +78,20 @@ minidns top --blocked                   most-blocked domains
 minidns stats                           cache hit rate, latency, rcodes
 ```
 
-Configuration lives in `/etc/minidns/config.yaml`; run `minidns apply` after
-editing it by hand. The generated unbound fragment goes to
+Configuration lives in `/etc/minidns/config.yaml`; after editing it by hand,
+`minidns config validate` checks it, `minidns config diff` shows what would
+change and `minidns apply` activates it. `minidns backup create` / `minidns
+restore <file>` save and bring back everything minidns cannot re-create.
+Read-only commands work without sudo. The generated unbound fragment goes to
 `/etc/unbound/unbound.conf.d/minidns.conf`.
 
 ### Zone mirroring
 
-Put a DigitalOcean API token (read scope is enough) in the config:
+Store a DigitalOcean API token (read scope is enough) — it goes to
+`/etc/minidns/credentials.yaml`, readable by root only, never into `config.yaml`:
 
-```yaml
-providers:
-  digitalocean:
-    token: dop_v1_...
+```bash
+sudo minidns cloud provider set-token digitalocean < do-token.txt
 ```
 
 `minidns cloud zone add example.com` pulls the full zone file from the DO API and

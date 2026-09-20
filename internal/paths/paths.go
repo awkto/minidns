@@ -12,6 +12,10 @@ func prefix() string { return os.Getenv("MINIDNS_PREFIX") }
 func ConfigDir() string  { return prefix() + "/etc/minidns" }
 func ConfigFile() string { return filepath.Join(ConfigDir(), "config.yaml") }
 
+// CredentialsFile holds provider tokens, apart from config.yaml so that the
+// configuration itself can be world-readable.
+func CredentialsFile() string { return filepath.Join(ConfigDir(), "credentials.yaml") }
+
 func StateDir() string { return prefix() + "/var/lib/minidns" }
 func RPZDir() string   { return filepath.Join(StateDir(), "rpz") }
 func ZoneDir() string  { return filepath.Join(StateDir(), "zones") }

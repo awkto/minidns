@@ -325,6 +325,56 @@ expect "resolution over DoT works" "rcode +NOERROR" minidns test cloudflare.com
 expect "forwarder test speaks DoT"  "9.9.9.9 +ok" minidns forwarder test
 kill "$(cat /tmp/corp-dns.pid)" 2>/dev/null
 
+echo "== config, doctor, backup =="
+expect "config validate"                  "Configuration is valid" minidns config validate
+expect "config diff: nothing pending"     "No differences" minidns config diff
+expect "config render prints the unbound config" "^server:" minidns config render
+expect "config show --json"               '"Port": 53|"port": 53' minidns config show --json
+expect "doctor: healthy"                  " 0 failed" minidns doctor
+expect "doctor --json"                    '"healthy": true' minidns doctor --json
+sed -i 's/^msg_cache_mb: .*/msg_cache_mb: 32/' /etc/minidns/config.yaml
+expect "config diff shows a hand edit that is not applied yet" "^\+ +msg-cache-size: 32m" minidns config diff
+expect "doctor points at it"              "WARN. generated config" minidns doctor --no-network
+minidns apply >/dev/null; wait_dns
+expect "…apply clears it"                 "No differences" minidns config diff
+cp /etc/minidns/config.yaml /tmp/config.good
+echo "listen: [" >> /etc/minidns/config.yaml
+expect_rc "config validate rejects a broken file → exit 3" 3 minidns config validate
+expect_rc "doctor fails on it → exit 1"   1 minidns doctor --no-network
+cp /tmp/config.good /etc/minidns/config.yaml
+minidns zone add backup.example >/dev/null; wait_dns
+minidns record add backup.example www A 10.9.9.9 >/dev/null
+minidns block add kept.example.org >/dev/null
+expect "backup create"                    "Backup written" minidns backup create
+expect "backups are private"              "^600 " bash -c 'stat -c "%a %n" /var/lib/minidns/backups/*.tar.gz | head -1'
+BACKUP="$(ls /var/lib/minidns/backups/*.tar.gz | tail -1)"
+minidns zone remove backup.example --force >/dev/null; wait_dns
+minidns block remove kept.example.org >/dev/null
+expect "…zone is gone"                    "NXDOMAIN|SERVFAIL|REFUSED" minidns query www.backup.example
+expect "restore"                          "Restored [0-9]+ files" minidns restore "$BACKUP"
+wait_dns
+expect "…the zone and its record are back" "10.9.9.9" minidns query www.backup.example
+expect "…and the manual block"            "^kept.example.org$" minidns block list
+expect "…the previous state was kept too" "before-restore" minidns backup list
+printf 'not a tarball' > /tmp/bad.tar.gz
+expect_rc "restore refuses a foreign file → exit 3" 3 minidns restore /tmp/bad.tar.gz
+minidns zone remove backup.example --force >/dev/null; wait_dns
+minidns block remove kept.example.org >/dev/null
+
+echo "== read-only commands work without root =="
+as_user() { su -s /bin/sh nobody -c "$*"; }
+expect "query"            "NOERROR"          as_user minidns query example.org
+expect "test"             "rcode +NOERROR"   as_user minidns test example.org
+expect "block explain"    "BLOCKED"          as_user minidns block explain doubleclick.net
+expect "status"           "unbound \(running\)" as_user minidns status
+expect "forwarder list"   "Global forwarders" as_user minidns forwarder list
+expect "zone list"        "no local zones|ZONE" as_user minidns zone list
+expect "blocklist list"   "stevenblack"      as_user minidns blocklist list
+expect "config show"      "allow_networks"   as_user minidns config show
+expect_rc "a change without root → exit 8" 8 su -s /bin/sh nobody -c "minidns block add x.example.org"
+expect "…with a hint"     "run it with sudo" as_user minidns block add x.example.org
+check  "the credentials file is not readable" bash -c '! su -s /bin/sh nobody -c "cat /etc/minidns/credentials.yaml" 2>/dev/null | grep -q .'
+
 echo "== logs / metrics =="
 minidns block testblocked.example.com >/dev/null
 minidns test testblocked.example.com >/dev/null 2>&1

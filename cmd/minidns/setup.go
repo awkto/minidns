@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
+
 	"github.com/awkto/minidns/internal/adblock"
 	"github.com/awkto/minidns/internal/config"
 	"github.com/awkto/minidns/internal/paths"
@@ -155,6 +157,19 @@ func cmdApplyQuiet() error {
 	return nil
 }
 
+// engineUp reports whether unbound is serving. Without root the control
+// socket is off limits, so an answered query counts as well.
+func engineUp(cfg *config.Config) bool {
+	if unbound.Active() {
+		return true
+	}
+	if os.Geteuid() == 0 {
+		return false
+	}
+	_, _, err := exchange(serverAddr(cfg), "localhost", dns.TypeA, true)
+	return err == nil
+}
+
 // startupOptions extracts the generated options unbound reads only when it
 // starts (a reload ignores changes to them).
 func startupOptions(conf string) string {
@@ -178,9 +193,13 @@ func persistMigration(cfg *config.Config) {
 	}
 	if old, err := os.ReadFile(paths.ConfigFile()); err == nil {
 		os.WriteFile(paths.ConfigFile()+".pre-v0.2", old, 0o600)
+		os.Chmod(paths.ConfigFile()+".pre-v0.2", 0o600)
+	}
+	if path, _, err := createBackup("before-migration", ""); err == nil {
+		fmt.Println("backup of the pre-migration state:", path)
 	}
 	if err := config.Save(cfg); err == nil {
-		fmt.Println("config migrated to the v0.2 layout (zones: → cloud_zones:); previous file kept as config.yaml.pre-v0.2")
+		fmt.Println("config migrated to the v0.2 layout (zones: → cloud_zones:, provider token → credentials.yaml); previous file kept as config.yaml.pre-v0.2")
 		cfg.Migrated = false
 	}
 }
@@ -222,7 +241,7 @@ func cmdStatus(args []string) error {
 	}
 
 	state := "stopped"
-	if unbound.Active() {
+	if engineUp(cfg) {
 		state = "running"
 	}
 	fmt.Printf("engine      unbound (%s)\n", state)
