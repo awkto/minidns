@@ -26,6 +26,12 @@ func ValidDomain(s string) bool {
 	return len(s) <= 253 && domainRe.MatchString(s)
 }
 
+var listNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+
+// ValidListName reports whether s is safe to use as a blocklist name: it
+// ends up in a file name and in the generated unbound config.
+func ValidListName(s string) bool { return listNameRe.MatchString(s) }
+
 // Normalize lowercases and strips a trailing dot.
 func Normalize(s string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
@@ -75,28 +81,30 @@ func Write(path string, domains []string, action string, wildcard bool) (int, er
 	return len(sorted), os.Rename(tmp, path)
 }
 
-// ReadDomains returns the (non-wildcard) domains present in an RPZ file
-// previously written by Write.
+// ReadDomains returns the entries of an RPZ file previously written by
+// Write, as the user entered them: "example.com" stands for the domain and
+// the *.example.com companion Write generated for it, while a wildcard with
+// no bare companion ("*.example.com" on its own) was entered explicitly and
+// is returned as such.
 func ReadDomains(path string) ([]string, error) {
-	f, err := os.Open(path)
+	all, err := ReadAll(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	var out []string
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) >= 3 && fields[1] == "CNAME" && !strings.HasPrefix(fields[0], "*.") &&
-			!strings.HasPrefix(fields[0], "@") && !strings.HasPrefix(fields[0], "$") {
-			out = append(out, fields[0])
+	out := make([]string, 0, len(all))
+	for d := range all {
+		if bare, ok := strings.CutPrefix(d, "*."); ok {
+			if _, companion := all[bare]; companion {
+				continue
+			}
 		}
+		out = append(out, d)
 	}
-	return out, sc.Err()
+	sort.Strings(out)
+	return out, nil
 }
 
 // CountEntries counts CNAME policy records in an RPZ file (wildcards

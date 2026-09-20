@@ -44,3 +44,40 @@ func TestValidDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitWildcardRoundTrips(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "block.rpz")
+	if _, err := Write(p, []string{"*.foo.com", "bar.com"}, ActionBlock, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadDomains(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "*.foo.com" || got[1] != "bar.com" {
+		t.Fatalf("explicit wildcard lost on read-back: %v", got)
+	}
+	// a rewrite (what block/unblock does) must keep it
+	if _, err := Write(p, append(got, "baz.com"), ActionBlock, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Contains(p, "x.foo.com"); !ok {
+		t.Error("*.foo.com dropped by rewrite")
+	}
+	if _, ok := Contains(p, "foo.com"); ok {
+		t.Error("explicit wildcard must not block the apex")
+	}
+}
+
+func TestValidListName(t *testing.T) {
+	for _, good := range []string{"stevenblack", "oisd-big", "list_2"} {
+		if !ValidListName(good) {
+			t.Errorf("%q should be valid", good)
+		}
+	}
+	for _, bad := range []string{"", "../../evil", "a b", "Upper", "-x", "x\ny", "a/b", "x.rpz"} {
+		if ValidListName(bad) {
+			t.Errorf("%q should be invalid", bad)
+		}
+	}
+}
