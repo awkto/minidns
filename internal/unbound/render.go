@@ -185,13 +185,16 @@ func formatUpstream(u string, tls bool) string {
 	return u + "@853"
 }
 
+// caBundlePaths are the places a system CA bundle may live.
+var caBundlePaths = []string{
+	"/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
+	"/etc/pki/tls/certs/ca-bundle.crt",   // Fedora/RHEL
+	"/etc/ssl/cert.pem",                  // Alpine/BSD
+}
+
 // caBundle finds the system CA bundle for validating DoT upstream certs.
 func caBundle() string {
-	for _, p := range []string{
-		"/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
-		"/etc/pki/tls/certs/ca-bundle.crt",   // Fedora/RHEL
-		"/etc/ssl/cert.pem",                  // Alpine/BSD
-	} {
+	for _, p := range caBundlePaths {
 		if fileExists(p) {
 			return p
 		}

@@ -60,8 +60,27 @@ jobs:
             minidns-linux-${{ matrix.goarch }}
             *.deb
 
-  release:
+  # a release must pass the same fresh-install and upgrade tests as CI, on
+  # both supported baselines, with the exact deb that will be published
+  e2e:
     needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:24.04', 'debian:12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: minidns-amd64
+      - name: end-to-end (fresh install)
+        run: docker run --rm -v "$PWD:/work" ${{ matrix.image }} bash /work/scripts/e2e.sh
+      - name: upgrade from v0.1.0
+        run: docker run --rm -v "$PWD:/work" -e FROM_VERSION=v0.1.0 ${{ matrix.image }} bash /work/scripts/upgrade-test.sh
+
+  release:
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Resolve tag
